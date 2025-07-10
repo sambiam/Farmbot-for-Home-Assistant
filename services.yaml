@@ -1,0 +1,18 @@
+execute_sequence:
+  description: "Run a FarmBot sequence."
+  fields:
+    sequence_id:
+      description: "ID of the sequence."
+      example: 123
+move_to:
+  description: "Move to X/Y/Z coordinates."
+  fields:
+    x:
+      description: "X position in mm."
+    y:
+      description: "Y position in mm."
+    z:
+      description: "Z position in mm."
+    speed:
+      description: "Movement speed %."
+# Add other services (toggle_peripheral, emergency_stop, etc.)

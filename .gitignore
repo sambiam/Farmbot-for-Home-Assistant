@@ -1,0 +1,27 @@
+# Byte-compiled Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Home Assistant runtime / storage
+.homeassistant/
+.home-assistant.log
+.storage/
+
+# Virtual environments
+venv/
+env/
+.env/
+.venv/
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# macOS
+.DS_Store
+
+# GitHub metadata
+*.orig
