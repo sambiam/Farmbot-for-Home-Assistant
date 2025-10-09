@@ -29,13 +29,14 @@ class FarmbotBusyBinarySensor(FarmbotEntity, BinarySensorEntity):
         return self._state
 
     async def async_added_to_hass(self):
-        async_dispatcher_connect(self.hass, SIGNAL_STATE, self._update_from_state)
+        unsub = async_dispatcher_connect(self.hass, SIGNAL_STATE, self._update_from_state)
+        self.async_on_remove(unsub)
 
     def _update_from_state(self, status):
         busy = status.get("informational_settings", {}).get("busy", False)
         if busy != self._state:
             self._state = busy
-            self.async_write_ha_state()
+            self.schedule_update_ha_state()
 
 
 class FarmbotEstopBinarySensor(FarmbotEntity, BinarySensorEntity):
@@ -52,10 +53,10 @@ class FarmbotEstopBinarySensor(FarmbotEntity, BinarySensorEntity):
         return self._state
 
     async def async_added_to_hass(self):
-        async_dispatcher_connect(self.hass, SIGNAL_STATE, self._update_from_state)
-
+        unsub = async_dispatcher_connect(self.hass, SIGNAL_STATE, self._update_from_state)
+        self.async_on_remove(unsub)
     def _update_from_state(self, status):
         locked = status.get("informational_settings", {}).get("locked", False)
         if locked != self._state:
             self._state = locked
-            self.async_write_ha_state()
+            self.schedule_update_ha_state()

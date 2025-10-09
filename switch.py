@@ -21,8 +21,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         2:  "Rotary Tool",
         3:  "Rotary Tool Reverse",
         7:  "Lighting",
-        8:  "Vacuum",
-        9:  "Water",
+        9:  "Vacuum",
+        8:  "Water",
        10:  "Peripheral 4",
        12:  "Peripheral 5",
     }
@@ -84,7 +84,7 @@ class FarmbotPeripheralSwitch(FarmbotEntity, SwitchEntity):
         new_state = bool(val)
         if new_state != self._state:
             self._state = new_state
-            self.async_write_ha_state()
+            self.schedule_update_ha_state()
 
     async def async_update(self):
         """Fallback polling in case dispatcher missed an update."""
@@ -150,4 +150,4 @@ class FarmbotEmergencyStopSwitch(FarmbotEntity, SwitchEntity):
         )
         if locked != self._state:
             self._state = locked
-            self.async_write_ha_state()
+            self.schedule_update_ha_state()
