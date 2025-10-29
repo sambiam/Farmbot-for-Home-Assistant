@@ -1,4 +1,4 @@
-# custom_components/farmbot/__init__.py
+custom_components/farmbot/__init__.py
 
 from homeassistant.core import HomeAssistant
 from .const import DOMAIN
@@ -32,3 +32,4 @@ async def async_unload_entry(hass: HomeAssistant, entry):
     manager = hass.data[DOMAIN].pop(entry.entry_id)
     await manager.disconnect_mqtt()
     return True
+
