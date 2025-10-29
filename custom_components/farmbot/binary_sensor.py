@@ -1,4 +1,4 @@
-# custom_components/farmbot/binary_sensor.py
+
 import logging
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -60,3 +60,4 @@ class FarmbotEstopBinarySensor(FarmbotEntity, BinarySensorEntity):
         if locked != self._state:
             self._state = locked
             self.schedule_update_ha_state()
+
