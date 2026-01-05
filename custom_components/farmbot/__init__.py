@@ -42,7 +42,7 @@ async def async_setup_entry(hass: HomeAssistant, entry):
     # Forward each platform to its respective setup file
     await hass.config_entries.async_forward_entry_setups(
         entry,
-        ["switch", "sensor", "binary_sensor", "select"]
+        ["switch", "sensor", "button", "binary_sensor", "select"]
     )
     return True
 
