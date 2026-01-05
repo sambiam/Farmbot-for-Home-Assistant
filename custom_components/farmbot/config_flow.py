@@ -84,3 +84,57 @@ class FarmbotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user", data_schema=data_schema, errors=errors
         )
 
+    async def async_step_reauth(self, user_input=None):
+        """Handle reauth flow when token expires or MQTT auth fails."""
+        # Store entry_id from context for later update
+        self._reauth_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None):
+        """Confirm reauth with email/password."""
+        errors = {}
+
+        if user_input is not None:
+            try:
+                token_obj = await self.hass.async_add_executor_job(
+                    request_token,
+                    user_input["email"],
+                    user_input["password"],
+                )
+            except AuthenticationError:
+                errors["base"] = "auth"
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception("Unexpected error during reauth token fetch")
+                errors["base"] = "unknown"
+            else:
+                # Update existing entry with new credentials
+                self.hass.config_entries.async_update_entry(
+                    self._reauth_entry,
+                    data={
+                        "token": token_obj["encoded"],
+                        "device_id": token_obj["unencoded"]["bot"],
+                        "mqtt_host": token_obj["unencoded"]["mqtt"],
+                    },
+                )
+                # Reload the entry to apply new credentials
+                await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
+
+                return self.async_abort(reason="reauth_successful")
+
+        data_schema = vol.Schema(
+            {
+                vol.Required("email"): str,
+                vol.Required("password"): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=data_schema,
+            errors=errors,
+            description_placeholders={
+                "device_id": self._reauth_entry.data.get("device_id", "unknown")
+            },
+        )
+

@@ -5,9 +5,20 @@
         "title": "FarmBot",
         "description": "Sign in to FarmBot",
         "data": { "email": "Email", "password": "Password" }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate FarmBot",
+        "description": "Your FarmBot token has expired or authentication failed. Please sign in again to continue. Device: {device_id}",
+        "data": { "email": "Email", "password": "Password" }
       }
     },
-    "error": { "invalid_auth": "Invalid authentication" },
-    "abort": { "already_configured": "Already configured" }
+    "error": {
+      "auth": "Invalid authentication",
+      "unknown": "Unexpected error occurred"
+    },
+    "abort": {
+      "already_configured": "Already configured",
+      "reauth_successful": "Reauthentication successful"
+    }
   }
 }

@@ -2,19 +2,23 @@ import json
 import uuid
 import logging
 import ssl
+import base64
+import time
 from typing import Tuple, Optional
 import requests
-from .const import API_BASE_URL
-
-import paho.mqtt.client as mqtt
+from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
+import paho.mqtt.client as mqtt
+
 from .const import (
+    API_BASE_URL,
     MQTT_PORT,
     TOPIC_STATUS,
     TOPIC_COMMAND,
     TOPIC_LOGS,
     SIGNAL_STATE,
+    TOKEN_REFRESH_WINDOW,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,10 +60,27 @@ def _split_host_port(raw_host: str, default_port: int) -> Tuple[str, int]:
             host, port = h, int(p)
     return host, port
 
+def _decode_jwt_payload(token: str) -> Optional[dict]:
+    """Decode JWT payload without signature verification."""
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        # Add padding if needed
+        payload_b64 = parts[1]
+        padding = 4 - (len(payload_b64) % 4)
+        if padding != 4:
+            payload_b64 += "=" * padding
+        payload_bytes = base64.urlsafe_b64decode(payload_b64)
+        return json.loads(payload_bytes)
+    except Exception as e:
+        _LOGGER.debug("Failed to decode JWT payload: %s", e)
+        return None
+
 class FarmbotManager:
     """Central manager for FarmBot integration over MQTT."""
 
-    def __init__(self, hass, token: str, device_id: str, mqtt_host: str):
+    def __init__(self, hass, token: str, device_id: str, mqtt_host: str, entry=None):
         self.hass = hass
         self.token = str(token).strip()                 # encoded JWT
         self.device_id = str(device_id).strip()         # 'device_<id>' or numeric
@@ -67,7 +88,116 @@ class FarmbotManager:
         self.status: dict = {}
         self.device_name = f"FarmBot {self.device_id}"
         self._mqtt: Optional[mqtt.Client] = None
+        self._entry = entry  # ConfigEntry reference for updates and reauth
+        self._auth_failed = False  # Track auth failure to prevent spam
+        self._last_rc4_log_time = 0  # Rate-limit rc=4 logging
         # Do not connect here; async_setup_entry will await connect_mqtt()
+
+    # -------------------- Token Refresh --------------------
+    def _should_refresh_token(self) -> bool:
+        """Check if token needs refresh based on expiry."""
+        payload = _decode_jwt_payload(self.token)
+        if not payload:
+            _LOGGER.warning("Unable to decode token payload for expiry check")
+            return False
+
+        exp = payload.get("exp")
+        if not exp:
+            _LOGGER.warning("Token missing 'exp' field")
+            return False
+
+        now = int(time.time())
+        time_until_expiry = exp - now
+
+        if time_until_expiry <= 0:
+            _LOGGER.warning("Token has expired (exp=%s, now=%s)", exp, now)
+            return True
+
+        if time_until_expiry < TOKEN_REFRESH_WINDOW:
+            _LOGGER.info("Token expires in %s seconds (< %s window), will refresh",
+                        time_until_expiry, TOKEN_REFRESH_WINDOW)
+            return True
+
+        _LOGGER.debug("Token still valid for %s seconds", time_until_expiry)
+        return False
+
+    async def async_refresh_token(self) -> bool:
+        """Refresh the JWT token by calling FarmBot API. Returns True on success."""
+        _LOGGER.info("Attempting to refresh FarmBot token")
+
+        try:
+            session = aiohttp_client.async_get_clientsession(self.hass)
+            url = f"{API_BASE_URL}/tokens"
+            headers = {"Authorization": f"Bearer {self.token}"}
+
+            async with session.get(url, headers=headers, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    token_obj = data.get("token", {})
+
+                    new_encoded = token_obj.get("encoded")
+                    new_unencoded = token_obj.get("unencoded", {})
+
+                    if not new_encoded or not new_unencoded:
+                        _LOGGER.error("Token refresh response missing fields: %s", token_obj)
+                        return False
+
+                    # Extract new credentials
+                    new_device_id = new_unencoded.get("bot", self.device_id)
+                    new_mqtt_host = new_unencoded.get("mqtt", self.mqtt_host_raw)
+
+                    # Update config entry
+                    if self._entry:
+                        new_data = {
+                            **self._entry.data,
+                            "token": new_encoded,
+                            "device_id": new_device_id,
+                            "mqtt_host": new_mqtt_host,
+                        }
+                        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+                        _LOGGER.info("Config entry updated with new token")
+
+                    # Update in-memory credentials
+                    self.token = new_encoded
+                    self.device_id = new_device_id
+                    self.mqtt_host_raw = new_mqtt_host
+
+                    # Reconnect MQTT with new credentials
+                    _LOGGER.info("Reconnecting MQTT with refreshed token")
+                    await self.disconnect_mqtt()
+                    await self.connect_mqtt()
+
+                    # Reset auth failure flag on success
+                    self._auth_failed = False
+
+                    return True
+
+                elif resp.status in (401, 403):
+                    _LOGGER.error("Token refresh failed with auth error %s - triggering reauth", resp.status)
+                    return False
+                else:
+                    body = await resp.text()
+                    _LOGGER.error("Token refresh failed [%s]: %s", resp.status, body)
+                    return False
+
+        except Exception as e:
+            _LOGGER.exception("Exception during token refresh: %s", e)
+            return False
+
+    async def async_check_and_refresh_token(self) -> bool:
+        """Check token expiry and refresh if needed. Returns True if token is valid."""
+        if not self._should_refresh_token():
+            return True  # Token still valid, no refresh needed
+
+        success = await self.async_refresh_token()
+
+        if not success and self._entry and not self._auth_failed:
+            # Trigger reauth flow
+            _LOGGER.warning("Token refresh failed, triggering reauth flow")
+            self._auth_failed = True
+            self._entry.async_start_reauth(self.hass)
+
+        return success
 
     # -------------------- Connection (run in executor) --------------------
     def _connect_mqtt_blocking(self):
@@ -124,6 +254,23 @@ class FarmbotManager:
             client.subscribe(TOPIC_STATUS.format(device_id=self.device_id))
             client.subscribe(TOPIC_LOGS.format(device_id=self.device_id))
             _LOGGER.info("MQTT connected and subscribed for %s", self.device_id)
+            # Reset auth failure flag on successful connection
+            self._auth_failed = False
+        elif rc == 4:
+            # Bad username or password - rate limit logging
+            now = time.time()
+            if now - self._last_rc4_log_time > 60:  # Log at most once per minute
+                _LOGGER.error("MQTT connect failed: rc=4 (Bad username or password) - token may be expired")
+                self._last_rc4_log_time = now
+
+            # Trigger reauth if not already done
+            if self._entry and not self._auth_failed:
+                _LOGGER.warning("MQTT authentication failed, triggering reauth flow")
+                self._auth_failed = True
+                # Schedule reauth trigger in event loop
+                self.hass.loop.call_soon_threadsafe(
+                    self._entry.async_start_reauth, self.hass
+                )
         else:
             _LOGGER.error("MQTT connect failed: rc=%s (%s)", rc, _RC_TEXT.get(rc, "unknown"))
 
