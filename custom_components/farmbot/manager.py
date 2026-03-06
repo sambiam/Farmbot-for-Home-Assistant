@@ -324,6 +324,20 @@ class FarmbotManager:
         url = f"{API_BASE_URL}/sequences"
         headers = {"Authorization": f"Bearer {self.token}"}
         resp = requests.get(url, headers=headers, timeout=10)
+
+        if resp.status_code in (401, 403):
+            _LOGGER.warning(
+                "FarmBot API returned %s - token may be expired, triggering reauth",
+                resp.status_code,
+            )
+            if self._entry and not self._auth_failed:
+                self._auth_failed = True
+                # This may be called from an executor thread, so schedule in event loop
+                self.hass.loop.call_soon_threadsafe(
+                    self._entry.async_start_reauth, self.hass
+                )
+            return []
+
         resp.raise_for_status()
         data = resp.json() or []
         items = []
