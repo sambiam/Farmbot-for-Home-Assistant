@@ -109,8 +109,8 @@ class FarmbotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected error during reauth token fetch")
                 errors["base"] = "unknown"
             else:
-                # Update existing entry with new credentials
-                self.hass.config_entries.async_update_entry(
+                # Update existing entry with new credentials and trigger reload
+                return self.async_update_reload_and_abort(
                     self._reauth_entry,
                     data={
                         "token": token_obj["encoded"],
@@ -118,10 +118,6 @@ class FarmbotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "mqtt_host": token_obj["unencoded"]["mqtt"],
                     },
                 )
-                # Reload the entry to apply new credentials
-                await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
-
-                return self.async_abort(reason="reauth_successful")
 
         data_schema = vol.Schema(
             {

@@ -7,6 +7,8 @@ from .manager import FarmbotManager
 
 _LOGGER = logging.getLogger(__name__)
 
+PLATFORMS = ["switch", "sensor", "button", "binary_sensor", "select"]
+
 async def async_setup(hass: HomeAssistant, config: dict):
     """Validate config (none needed)."""
     return True
@@ -40,16 +42,20 @@ async def async_setup_entry(hass: HomeAssistant, entry):
     _LOGGER.info("Token refresh scheduler started (interval: %s)", refresh_interval)
 
     # Forward each platform to its respective setup file
-    await hass.config_entries.async_forward_entry_setups(
-        entry,
-        ["switch", "sensor", "button", "binary_sensor", "select"]
-    )
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry):
     """Unload a config entry."""
-    manager = hass.data[DOMAIN].pop(entry.entry_id)
-    await manager.disconnect_mqtt()
+    # Unload all platforms first so they can be re-setup on reload
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        _LOGGER.warning("Failed to unload one or more FarmBot platforms")
+        return False
+
+    manager = hass.data[DOMAIN].pop(entry.entry_id, None)
+    if manager:
+        await manager.disconnect_mqtt()
     return True
 
 
