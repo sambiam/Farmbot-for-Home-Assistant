@@ -1,6 +1,7 @@
 import logging
 from datetime import timedelta
 from homeassistant.core import HomeAssistant
+import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
 from .const import DOMAIN, TOKEN_REFRESH_INTERVAL
 from .manager import FarmbotManager
@@ -9,9 +10,7 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["switch", "sensor", "button", "binary_sensor", "select"]
 
-async def async_setup(hass: HomeAssistant, config: dict):
-    """Validate config (none needed)."""
-    return True
+CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
 async def async_setup_entry(hass: HomeAssistant, entry):
     """Set up FarmBot from a config entry."""
