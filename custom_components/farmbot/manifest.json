@@ -1,19 +1,17 @@
 {
   "domain": "farmbot",
   "name": "FarmBot",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "config_flow": true,
-  "iot_class": "local_push",
+  "iot_class": "cloud_push",
   "homeassistant": "2023.8.0",
-  "integration_type": "hardware",
-  "dependencies": [
-    "mqtt"
-  ],
+  "integration_type": "hub",
+  "documentation": "https://github.com/sambiam/Farmbot-for-Home-Assistant",
+  "issue_tracker": "https://github.com/sambiam/Farmbot-for-Home-Assistant/issues",
+  "codeowners": ["@sambiam"],
+  "dependencies": [],
   "requirements": [
     "requests>=2.0.0",
     "paho-mqtt>=1.6.0"
-  ],
-  "entity_component": {
-    "platforms": ["switch", "sensor", "select"]
-  }
+  ]
 }
