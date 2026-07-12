@@ -12,28 +12,41 @@ _LOGGER = logging.getLogger(__name__)
 class AuthenticationError(Exception):
     """Raised when authentication fails."""
 
+def _safe_error_message(resp: requests.Response) -> str:
+    """Return a short, non-sensitive server error message for logging.
+
+    Never returns raw response bodies: those can echo back account details
+    (or, in principle, credentials) supplied in the request.
+    """
+    try:
+        payload = resp.json()
+    except ValueError:
+        return "no additional details"
+    if isinstance(payload, dict):
+        message = payload.get("error") or payload.get("message")
+        if isinstance(message, str) and message:
+            return message[:200]
+    return "no additional details"
+
 def request_token(email: str, password: str) -> dict:
     """Call FarmBot API to get the token object (encoded + unencoded)."""
     url = f"{API_BASE_URL}/tokens"
     payload = {"user": {"email": email, "password": password}}
     resp = requests.post(url, json=payload, timeout=10)
 
-    # Log full response on error for debugging
     if resp.status_code != 200:
-        body = None
-        try:
-            body = resp.json()
-        except ValueError:
-            body = resp.text
         _LOGGER.error(
             "FarmBot token request failed [%s]: %s",
-            resp.status_code, body
+            resp.status_code, _safe_error_message(resp),
         )
 
     if resp.status_code == 200:
         token_obj = resp.json().get("token") or {}
         if not token_obj.get("encoded") or not token_obj.get("unencoded"):
-            _LOGGER.error("FarmBot token response missing fields: %s", token_obj)
+            _LOGGER.error(
+                "FarmBot token response missing expected fields (has_encoded=%s, has_unencoded=%s)",
+                bool(token_obj.get("encoded")), bool(token_obj.get("unencoded")),
+            )
             raise AuthenticationError
         return token_obj
 
@@ -47,7 +60,7 @@ def request_token(email: str, password: str) -> dict:
 class FarmbotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a FarmBot config flow."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(self, user_input=None):
         """Handle the initial step."""
@@ -95,6 +108,21 @@ class FarmbotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return await self.async_step_reauth_confirm()
 
+    def _expected_reauth_bot_id(self) -> str | None:
+        """Return the bot ID the reauth entry must match, or None if unknown.
+
+        Prefers the entry's unique_id (assigned at creation, or by config-entry
+        migration for legacy entries); falls back to the stored device_id for
+        entries that somehow still lack a unique_id.
+        """
+        unique_id = self._reauth_entry.unique_id
+        if unique_id is not None:
+            return str(unique_id)
+        device_id = self._reauth_entry.data.get("device_id")
+        if device_id is not None:
+            return str(device_id)
+        return None
+
     async def async_step_reauth_confirm(self, user_input=None):
         """Confirm reauth with email/password."""
         errors = {}
@@ -112,15 +140,33 @@ class FarmbotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected error during reauth token fetch")
                 errors["base"] = "unknown"
             else:
-                # Update existing entry with new credentials and trigger reload
-                return self.async_update_reload_and_abort(
-                    self._reauth_entry,
-                    data={
-                        "token": token_obj["encoded"],
-                        "device_id": token_obj["unencoded"]["bot"],
-                        "mqtt_host": token_obj["unencoded"]["mqtt"],
-                    },
-                )
+                expected_bot_id = self._expected_reauth_bot_id()
+                returned_bot_id = str(token_obj["unencoded"]["bot"])
+
+                if expected_bot_id is None:
+                    _LOGGER.error(
+                        "Reauth for FarmBot entry %s rejected: entry has no unique_id "
+                        "or device_id to verify identity against",
+                        self._reauth_entry.entry_id,
+                    )
+                    errors["base"] = "wrong_account"
+                elif returned_bot_id != expected_bot_id:
+                    _LOGGER.error(
+                        "Reauth for FarmBot entry %s rejected: credentials belong to "
+                        "bot %s, expected bot %s",
+                        self._reauth_entry.entry_id, returned_bot_id, expected_bot_id,
+                    )
+                    errors["base"] = "wrong_account"
+                else:
+                    # Update existing entry with new credentials and trigger reload
+                    return self.async_update_reload_and_abort(
+                        self._reauth_entry,
+                        data={
+                            "token": token_obj["encoded"],
+                            "device_id": token_obj["unencoded"]["bot"],
+                            "mqtt_host": token_obj["unencoded"]["mqtt"],
+                        },
+                    )
 
         data_schema = vol.Schema(
             {

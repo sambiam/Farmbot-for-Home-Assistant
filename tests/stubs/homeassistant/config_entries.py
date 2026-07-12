@@ -14,12 +14,13 @@ SOURCE_REAUTH = "reauth"
 class ConfigEntry:
     """A bare-bones stand-in for a loaded config entry."""
 
-    def __init__(self, entry_id, unique_id=None, data=None, domain=None, title=None):
+    def __init__(self, entry_id, unique_id=None, data=None, domain=None, title=None, version=1):
         self.entry_id = entry_id
         self.unique_id = unique_id
         self.data = dict(data or {})
         self.domain = domain
         self.title = title
+        self.version = version
 
 
 class ConfigEntries:
@@ -36,9 +37,13 @@ class ConfigEntries:
     def async_get_entry(self, entry_id):
         return next((e for e in self._entries if e.entry_id == entry_id), None)
 
-    def async_update_entry(self, entry, data=None, **kwargs):
+    def async_update_entry(self, entry, data=None, unique_id=None, version=None, **kwargs):
         if data is not None:
             entry.data = dict(data)
+        if unique_id is not None:
+            entry.unique_id = unique_id
+        if version is not None:
+            entry.version = version
 
 
 class ConfigFlow:

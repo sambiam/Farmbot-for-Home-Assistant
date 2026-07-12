@@ -185,6 +185,142 @@ def test_reauth_confirm_updates_existing_entry_not_a_new_one():
     assert hass.config_entries.async_entries("farmbot") == [existing]
 
 
+def test_flow_version_is_2():
+    assert FarmbotConfigFlow.VERSION == 2
+
+
+def test_reauth_confirm_succeeds_when_bot_id_matches_unique_id():
+    existing = ConfigEntry(
+        entry_id="existing-entry",
+        unique_id="42",
+        domain="farmbot",
+        data={"token": "old-token", "device_id": 42, "mqtt_host": "old.example.com"},
+    )
+    hass = FakeHass(entries=[existing])
+    flow = _flow(hass)
+    flow.context = {"entry_id": "existing-entry"}
+    _run(flow.async_step_reauth(None))
+
+    new_token_obj = {
+        "encoded": "new-jwt",
+        "unencoded": {"bot": 42, "mqtt": "new.example.com"},
+    }
+    with patch(
+        "custom_components.farmbot.config_flow.request_token",
+        return_value=new_token_obj,
+    ):
+        result = _run(
+            flow.async_step_reauth_confirm(
+                {"email": "user@example.com", "password": "new-password"}
+            )
+        )
+
+    assert result == {"type": "abort", "reason": "reauth_successful"}
+    assert existing.data["token"] == "new-jwt"
+    assert existing.unique_id == "42"
+
+
+def test_reauth_confirm_succeeds_for_legacy_entry_matching_device_id():
+    # Legacy entry: no unique_id yet, only a stored device_id.
+    existing = ConfigEntry(
+        entry_id="legacy-entry",
+        unique_id=None,
+        domain="farmbot",
+        data={"token": "old-token", "device_id": 42, "mqtt_host": "old.example.com"},
+    )
+    hass = FakeHass(entries=[existing])
+    flow = _flow(hass)
+    flow.context = {"entry_id": "legacy-entry"}
+    _run(flow.async_step_reauth(None))
+
+    new_token_obj = {
+        "encoded": "new-jwt",
+        "unencoded": {"bot": 42, "mqtt": "new.example.com"},
+    }
+    with patch(
+        "custom_components.farmbot.config_flow.request_token",
+        return_value=new_token_obj,
+    ):
+        result = _run(
+            flow.async_step_reauth_confirm(
+                {"email": "user@example.com", "password": "new-password"}
+            )
+        )
+
+    assert result == {"type": "abort", "reason": "reauth_successful"}
+    assert existing.data["token"] == "new-jwt"
+
+
+def test_reauth_confirm_fails_when_bot_id_differs():
+    existing = ConfigEntry(
+        entry_id="existing-entry",
+        unique_id="42",
+        domain="farmbot",
+        data={"token": "old-token", "device_id": 42, "mqtt_host": "old.example.com"},
+    )
+    hass = FakeHass(entries=[existing])
+    flow = _flow(hass)
+    flow.context = {"entry_id": "existing-entry"}
+    _run(flow.async_step_reauth(None))
+
+    other_bots_token_obj = {
+        "encoded": "someone-elses-jwt",
+        "unencoded": {"bot": 999, "mqtt": "other.example.com"},
+    }
+    with patch(
+        "custom_components.farmbot.config_flow.request_token",
+        return_value=other_bots_token_obj,
+    ):
+        result = _run(
+            flow.async_step_reauth_confirm(
+                {"email": "someone-else@example.com", "password": "their-password"}
+            )
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "wrong_account"}
+    # Original data and identity are left completely untouched.
+    assert existing.data == {
+        "token": "old-token", "device_id": 42, "mqtt_host": "old.example.com"
+    }
+    assert existing.unique_id == "42"
+    # No new entry was created.
+    assert hass.config_entries.async_entries("farmbot") == [existing]
+
+
+def test_reauth_confirm_fails_safely_with_no_known_identity():
+    # Both unique_id and device_id are missing: nothing to safely verify against.
+    existing = ConfigEntry(
+        entry_id="unknown-identity-entry",
+        unique_id=None,
+        domain="farmbot",
+        data={"token": "old-token", "mqtt_host": "old.example.com"},
+    )
+    hass = FakeHass(entries=[existing])
+    flow = _flow(hass)
+    flow.context = {"entry_id": "unknown-identity-entry"}
+    _run(flow.async_step_reauth(None))
+
+    token_obj = {
+        "encoded": "new-jwt",
+        "unencoded": {"bot": 42, "mqtt": "new.example.com"},
+    }
+    with patch(
+        "custom_components.farmbot.config_flow.request_token",
+        return_value=token_obj,
+    ):
+        result = _run(
+            flow.async_step_reauth_confirm(
+                {"email": "user@example.com", "password": "new-password"}
+            )
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "wrong_account"}
+    assert existing.data == {"token": "old-token", "mqtt_host": "old.example.com"}
+    assert existing.unique_id is None
+
+
 def test_reauth_confirm_invalid_auth_shows_form_error():
     existing = ConfigEntry(
         entry_id="existing-entry",

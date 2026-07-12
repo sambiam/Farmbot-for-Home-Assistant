@@ -3,10 +3,12 @@ from datetime import timedelta
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.event import async_track_time_interval
 
+from .config_flow import FarmbotConfigFlow
 from .const import DOMAIN, TOKEN_REFRESH_INTERVAL
 from .manager import FarmbotManager
 
@@ -26,16 +28,19 @@ SERVICE_EXECUTE_SEQUENCE_SCHEMA = vol.Schema(
     }
 )
 
-SERVICE_MOVE_TO_SCHEMA = vol.Schema(
-    {
-        vol.Required("config_entry_id"): cv.string,
-        vol.Optional("x"): vol.Coerce(float),
-        vol.Optional("y"): vol.Coerce(float),
-        vol.Optional("z"): vol.Coerce(float),
-        vol.Optional("speed", default=100): vol.All(
-            vol.Coerce(int), vol.Range(min=1, max=100)
-        ),
-    }
+SERVICE_MOVE_TO_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Required("config_entry_id"): cv.string,
+            vol.Optional("x"): vol.Coerce(float),
+            vol.Optional("y"): vol.Coerce(float),
+            vol.Optional("z"): vol.Coerce(float),
+            vol.Optional("speed", default=100): vol.All(
+                vol.Coerce(int), vol.Range(min=1, max=100)
+            ),
+        }
+    ),
+    cv.has_at_least_one_key("x", "y", "z"),
 )
 
 
@@ -119,6 +124,58 @@ async def async_setup_entry(hass: HomeAssistant, entry):
     # Forward each platform to its respective setup file
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate an old FarmBot config entry to the current version.
+
+    Version 1 entries (created before unique IDs were introduced) may be
+    missing ``unique_id``. Assign ``str(device_id)`` as the unique ID so
+    duplicate-FarmBot detection and reauth identity checks work for them.
+    """
+    if entry.version > FarmbotConfigFlow.VERSION:
+        _LOGGER.error(
+            "FarmBot config entry %s has version %s, newer than supported "
+            "version %s; refusing to migrate",
+            entry.entry_id, entry.version, FarmbotConfigFlow.VERSION,
+        )
+        return False
+
+    if entry.version == 1:
+        if entry.unique_id is None:
+            device_id = entry.data.get("device_id")
+            if device_id is None:
+                _LOGGER.error(
+                    "Cannot migrate FarmBot config entry %s: no unique_id and no "
+                    "device_id to identify the FarmBot",
+                    entry.entry_id,
+                )
+                return False
+
+            new_unique_id = str(device_id)
+            for other in hass.config_entries.async_entries(DOMAIN):
+                if other.entry_id != entry.entry_id and other.unique_id == new_unique_id:
+                    _LOGGER.error(
+                        "Cannot migrate FarmBot config entry %s: bot id %s is already "
+                        "claimed by config entry %s",
+                        entry.entry_id, new_unique_id, other.entry_id,
+                    )
+                    return False
+
+            hass.config_entries.async_update_entry(
+                entry, unique_id=new_unique_id, version=2
+            )
+            _LOGGER.info(
+                "Migrated FarmBot config entry %s to version 2 (assigned unique_id)",
+                entry.entry_id,
+            )
+        else:
+            hass.config_entries.async_update_entry(entry, version=2)
+            _LOGGER.info(
+                "Migrated FarmBot config entry %s to version 2", entry.entry_id
+            )
+
+    return True
+
 
 async def async_unload_entry(hass: HomeAssistant, entry):
     """Unload a config entry."""
