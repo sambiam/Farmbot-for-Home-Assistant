@@ -1,11 +1,11 @@
 """Config flow for FarmBot integration."""
 import logging
+
 import requests
 import voluptuous as vol
-
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
-from .const import DOMAIN, API_BASE_URL
+
+from .const import API_BASE_URL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,6 +65,9 @@ class FarmbotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected error fetching FarmBot token")
                 errors["base"] = "unknown"
             else:
+                bot_id = str(token_obj["unencoded"]["bot"])
+                await self.async_set_unique_id(bot_id)
+                self._abort_if_unique_id_configured()
                 return self.async_create_entry(
                     title=user_input["email"],
                     data={

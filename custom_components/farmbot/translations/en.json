@@ -26,6 +26,10 @@
       "name": "Execute sequence",
       "description": "Run a FarmBot sequence.",
       "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot to run the sequence on."
+        },
         "sequence_id": {
           "name": "Sequence ID",
           "description": "ID of the sequence."
@@ -36,6 +40,10 @@
       "name": "Move to",
       "description": "Move to X/Y/Z coordinates.",
       "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot to move."
+        },
         "x": {
           "name": "X",
           "description": "X position in mm."

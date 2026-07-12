@@ -31,3 +31,60 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
+
+  lint:
+    name: Ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install ruff
+        run: pip install ruff==0.15.21
+
+      - name: Run ruff check
+        run: ruff check .
+
+  syntax:
+    name: Python syntax & import check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Compile-check all Python files
+        run: python -m compileall -q custom_components tests
+
+      - name: Install component requirements
+        run: pip install requests==2.34.2 paho-mqtt==2.1.0 voluptuous==0.16.0
+
+      - name: Import-check the integration package
+        run: python -c "import sys; sys.path.insert(0, 'tests/stubs'); import custom_components.farmbot"
+
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install test dependencies
+        run: pip install pytest==8.3.5 requests==2.34.2 paho-mqtt==2.1.0 voluptuous==0.16.0
+
+      - name: Run pytest
+        run: pytest -q

@@ -1,5 +1,7 @@
 from homeassistant.helpers.entity import Entity
+
 from .const import DOMAIN
+
 
 class FarmbotEntity(Entity):
     """Base class for all FarmBot entities."""

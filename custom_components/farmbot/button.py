@@ -1,7 +1,9 @@
 # custom_components/farmbot/button.py
 
 import logging
+
 from homeassistant.components.button import ButtonEntity
+
 from .entity import FarmbotEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,7 +37,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
         buttons.append(WaterPlantsButton(manager))
         _LOGGER.info("Added WaterPlantsButton (sequence %d found)", WATER_PLANTS_SEQUENCE_ID)
     else:
-        _LOGGER.debug("WaterPlantsButton not added (sequence %d not found)", WATER_PLANTS_SEQUENCE_ID)
+        _LOGGER.debug(
+            "WaterPlantsButton not added (sequence %d not found)", WATER_PLANTS_SEQUENCE_ID
+        )
 
     if buttons:
         async_add_entities(buttons)

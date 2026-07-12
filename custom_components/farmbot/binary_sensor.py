@@ -1,7 +1,9 @@
 
 import logging
+
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
 from .const import DOMAIN, SIGNAL_STATE
 from .entity import FarmbotEntity
 
