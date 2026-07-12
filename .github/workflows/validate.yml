@@ -17,6 +17,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # No maintained stable tag exists for this action (its only release tag
+      # is 1.0.0 from 2020); @master is the reference Home Assistant's own
+      # docs and every hassfest workflow example use, since hassfest must
+      # track the current core schema.
       - name: Run hassfest
         uses: home-assistant/actions/hassfest@master
 
@@ -27,6 +31,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # HACS's own docs default to @main; its latest version tag (22.5.0) is
+      # from 2022 and long stale relative to main, so pinning to it would
+      # validate against outdated HACS requirements instead of the current
+      # ones.
       - name: Run HACS validation
         uses: hacs/action@main
         with:
@@ -66,7 +74,7 @@ jobs:
         run: python -m compileall -q custom_components tests
 
       - name: Install component requirements
-        run: pip install requests==2.34.2 paho-mqtt==2.1.0 voluptuous==0.16.0
+        run: pip install -r requirements-test.txt
 
       - name: Import-check the integration package
         run: python -c "import sys; sys.path.insert(0, 'tests/stubs'); import custom_components.farmbot"
@@ -84,7 +92,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install test dependencies
-        run: pip install pytest==8.3.5 requests==2.34.2 paho-mqtt==2.1.0 voluptuous==0.16.0
+        run: pip install pytest==8.3.5 -r requirements-test.txt
 
       - name: Run pytest
         run: pytest -q

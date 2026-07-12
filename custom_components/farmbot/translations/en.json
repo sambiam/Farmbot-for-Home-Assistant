@@ -14,7 +14,8 @@
     },
     "error": {
       "auth": "Invalid authentication",
-      "unknown": "Unexpected error occurred"
+      "unknown": "Unexpected error occurred",
+      "wrong_account": "These credentials belong to a different FarmBot."
     },
     "abort": {
       "already_configured": "Already configured",
@@ -38,7 +39,7 @@
     },
     "move_to": {
       "name": "Move to",
-      "description": "Move to X/Y/Z coordinates.",
+      "description": "Move to X/Y/Z coordinates. At least one of X, Y or Z must be supplied.",
       "fields": {
         "config_entry_id": {
           "name": "FarmBot",

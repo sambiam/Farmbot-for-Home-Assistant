@@ -13,6 +13,7 @@ execute_sequence:
           min: 1
           mode: box
 move_to:
+  # At least one of x, y or z must be supplied.
   fields:
     config_entry_id:
       required: true
