@@ -23,15 +23,6 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_RC_TEXT = {
-    0: "Connection accepted",
-    1: "Unacceptable protocol version",
-    2: "Identifier rejected",
-    3: "Server unavailable",
-    4: "Bad username or password",
-    5: "Not authorized",
-}
-
 def _mask(s: str, keep_start: int = 4, keep_end: int = 4) -> str:
     if not s:
         return ""
@@ -90,7 +81,7 @@ class FarmbotManager:
         self._mqtt: Optional[mqtt.Client] = None
         self._entry = entry  # ConfigEntry reference for updates and reauth
         self._auth_failed = False  # Track auth failure to prevent spam
-        self._last_rc4_log_time = 0  # Rate-limit rc=4 logging
+        self._last_bad_auth_log_time = 0  # Rate-limit bad-auth logging
         # Do not connect here; async_setup_entry will await connect_mqtt()
 
     # -------------------- Token Refresh --------------------
@@ -207,7 +198,7 @@ class FarmbotManager:
 
         client_id = f"ha-{username}-{uuid.uuid4().hex[:8]}"
         self._mqtt = mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION1,
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             client_id=client_id,
             protocol=mqtt.MQTTv311,
         )
@@ -253,19 +244,22 @@ class FarmbotManager:
         await self.hass.async_add_executor_job(self._disconnect_mqtt_blocking)
 
     # -------------------- MQTT callbacks --------------------
-    def _on_connect(self, client, userdata, flags, rc):
-        if rc == 0:
+    def _on_connect(self, client, userdata, flags, reason_code, properties):
+        # reason_code is a paho ReasonCode: compare by name/int, not by the old
+        # MQTTv3.1.1 rc values (e.g. "bad auth" is numeric 4 pre-migration,
+        # 134 as a ReasonCode) - see paho.mqtt.reasoncodes for the mapping.
+        if reason_code == 0:
             client.subscribe(TOPIC_STATUS.format(device_id=self.device_id))
             client.subscribe(TOPIC_LOGS.format(device_id=self.device_id))
             _LOGGER.info("MQTT connected and subscribed for %s", self.device_id)
             # Reset auth failure flag on successful connection
             self._auth_failed = False
-        elif rc == 4:
-            # Bad username or password - rate limit logging
+        elif reason_code == "Bad user name or password":
+            # Rate limit logging
             now = time.time()
-            if now - self._last_rc4_log_time > 60:  # Log at most once per minute
-                _LOGGER.error("MQTT connect failed: rc=4 (Bad username or password) - token may be expired")
-                self._last_rc4_log_time = now
+            if now - self._last_bad_auth_log_time > 60:  # Log at most once per minute
+                _LOGGER.error("MQTT connect failed: %s - token may be expired", reason_code)
+                self._last_bad_auth_log_time = now
 
             # Trigger reauth if not already done
             if self._entry and not self._auth_failed:
@@ -276,7 +270,7 @@ class FarmbotManager:
                     self._entry.async_start_reauth, self.hass
                 )
         else:
-            _LOGGER.error("MQTT connect failed: rc=%s (%s)", rc, _RC_TEXT.get(rc, "unknown"))
+            _LOGGER.error("MQTT connect failed: %s (reason code %s)", reason_code, reason_code.value)
 
     def _on_message(self, client, userdata, msg):
         try:
