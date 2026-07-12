@@ -20,5 +20,39 @@
       "already_configured": "Already configured",
       "reauth_successful": "Reauthentication successful"
     }
+  },
+  "services": {
+    "execute_sequence": {
+      "name": "Execute sequence",
+      "description": "Run a FarmBot sequence.",
+      "fields": {
+        "sequence_id": {
+          "name": "Sequence ID",
+          "description": "ID of the sequence."
+        }
+      }
+    },
+    "move_to": {
+      "name": "Move to",
+      "description": "Move to X/Y/Z coordinates.",
+      "fields": {
+        "x": {
+          "name": "X",
+          "description": "X position in mm."
+        },
+        "y": {
+          "name": "Y",
+          "description": "Y position in mm."
+        },
+        "z": {
+          "name": "Z",
+          "description": "Z position in mm."
+        },
+        "speed": {
+          "name": "Speed",
+          "description": "Movement speed %."
+        }
+      }
+    }
   }
 }
