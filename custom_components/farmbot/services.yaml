@@ -1,18 +1,42 @@
 execute_sequence:
-  description: "Run a FarmBot sequence."
   fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
     sequence_id:
-      description: "ID of the sequence."
+      required: true
       example: 123
+      selector:
+        number:
+          min: 1
+          mode: box
 move_to:
-  description: "Move to X/Y/Z coordinates."
   fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
     x:
-      description: "X position in mm."
+      selector:
+        number:
+          mode: box
+          step: any
     y:
-      description: "Y position in mm."
+      selector:
+        number:
+          mode: box
+          step: any
     z:
-      description: "Z position in mm."
+      selector:
+        number:
+          mode: box
+          step: any
     speed:
-      description: "Movement speed %."
-# Add other services (toggle_peripheral, emergency_stop, etc.)
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: slider

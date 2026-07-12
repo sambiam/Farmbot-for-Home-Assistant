@@ -1,10 +1,11 @@
 # custom_components/farmbot/switch.py
 
-from datetime import timedelta
 import logging
+from datetime import timedelta
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
 from .const import DOMAIN, SIGNAL_STATE
 from .entity import FarmbotEntity
 

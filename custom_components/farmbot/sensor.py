@@ -1,9 +1,10 @@
 # custom_components/farmbot/sensor.py
 
-from datetime import timedelta
 import logging
+from datetime import timedelta
 
 from homeassistant.components.sensor import SensorEntity
+
 from .const import DOMAIN
 from .entity import FarmbotEntity
 

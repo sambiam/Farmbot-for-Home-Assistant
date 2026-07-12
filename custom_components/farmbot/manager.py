@@ -1,24 +1,24 @@
+import base64
 import json
-import uuid
 import logging
 import ssl
-import base64
 import time
-from typing import Tuple, Optional
+import uuid
+from typing import Optional, Tuple
+
+import paho.mqtt.client as mqtt
 import requests
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
-import paho.mqtt.client as mqtt
-
 from .const import (
     API_BASE_URL,
     MQTT_PORT,
-    TOPIC_STATUS,
-    TOPIC_COMMAND,
-    TOPIC_LOGS,
     SIGNAL_STATE,
     TOKEN_REFRESH_WINDOW,
+    TOPIC_COMMAND,
+    TOPIC_LOGS,
+    TOPIC_STATUS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -164,7 +164,10 @@ class FarmbotManager:
                     return True
 
                 elif resp.status in (401, 403):
-                    _LOGGER.error("Token refresh failed with auth error %s - triggering reauth", resp.status)
+                    _LOGGER.error(
+                        "Token refresh failed with auth error %s - triggering reauth",
+                        resp.status,
+                    )
                     return False
                 else:
                     body = await resp.text()
@@ -270,7 +273,9 @@ class FarmbotManager:
                     self._entry.async_start_reauth, self.hass
                 )
         else:
-            _LOGGER.error("MQTT connect failed: %s (reason code %s)", reason_code, reason_code.value)
+            _LOGGER.error(
+                "MQTT connect failed: %s (reason code %s)", reason_code, reason_code.value
+            )
 
     def _on_message(self, client, userdata, msg):
         try:
@@ -352,9 +357,12 @@ class FarmbotManager:
 
     def move_to(self, x=None, y=None, z=None, speed=100):
         args = {}
-        if x is not None: args["x"] = float(x)
-        if y is not None: args["y"] = float(y)
-        if z is not None: args["z"] = float(z)
+        if x is not None:
+            args["x"] = float(x)
+        if y is not None:
+            args["y"] = float(y)
+        if z is not None:
+            args["z"] = float(z)
         args["speed"] = int(speed)
         cs = [{"kind": "move", "args": args}]
         self.send_rpc_request(cs)
