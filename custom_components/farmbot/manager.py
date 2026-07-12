@@ -206,7 +206,11 @@ class FarmbotManager:
         host, port = _split_host_port(self.mqtt_host_raw, MQTT_PORT)
 
         client_id = f"ha-{username}-{uuid.uuid4().hex[:8]}"
-        self._mqtt = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
+        self._mqtt = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION1,
+            client_id=client_id,
+            protocol=mqtt.MQTTv311,
+        )
 
         # TLS is required by FarmBot’s broker; load system CAs (blocking)
         # Use modern TLS; do not disable verification.
