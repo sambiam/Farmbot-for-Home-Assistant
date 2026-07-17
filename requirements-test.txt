@@ -1,7 +1,9 @@
 # Shared test/CI dependency pins, single source of truth for the syntax
 # and pytest workflow jobs. Kept aligned with Home Assistant Core 2026.7.x's
-# homeassistant/package_constraints.txt (voluptuous, requests) and
-# custom_components/farmbot/manifest.json (requests, paho-mqtt).
+# homeassistant/package_constraints.txt (voluptuous, requests, aiohttp) and
+# custom_components/farmbot/manifest.json (requests, paho-mqtt, Pillow).
 requests==2.34.2
 paho-mqtt==2.1.0
 voluptuous==0.15.2
+aiohttp==3.14.1
+Pillow==12.3.0

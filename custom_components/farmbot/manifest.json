@@ -10,7 +10,8 @@
   "issue_tracker": "https://github.com/sambiam/Farmbot-for-Home-Assistant/issues",
   "requirements": [
     "requests==2.34.2",
-    "paho-mqtt==2.1.0"
+    "paho-mqtt==2.1.0",
+    "Pillow==12.3.0"
   ],
-  "version": "1.0.1"
+  "version": "1.1.0"
 }

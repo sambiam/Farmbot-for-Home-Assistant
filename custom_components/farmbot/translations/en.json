@@ -22,6 +22,22 @@
       "reauth_successful": "Reauthentication successful"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "FarmBot Vision bridge options",
+        "description": "These options control the optional bridge to a separate FarmBot Vision app. FarmBot credentials are never re-entered here.",
+        "data": {
+          "vision_enabled": "Enable FarmBot Vision bridge",
+          "vision_heartbeat_timeout_minutes": "Vision heartbeat timeout (minutes)",
+          "allow_automatic_radius_increases": "Allow automatic plant-radius increases",
+          "allow_vision_curve_writes": "Allow FarmBot Vision to create/update spread curves",
+          "maximum_plant_radius_mm": "Maximum allowed plant radius (mm)",
+          "minimum_automatic_confidence": "Minimum confidence for automatic changes"
+        }
+      }
+    }
+  },
   "services": {
     "execute_sequence": {
       "name": "Execute sequence",
@@ -62,6 +78,218 @@
           "description": "Movement speed %."
         }
       }
+    },
+    "list_vision_bots": {
+      "name": "List Vision bots",
+      "description": "Return the loaded FarmBot config entries available to the FarmBot Vision bridge. Never includes credentials.",
+      "fields": {}
+    },
+    "get_vision_inventory": {
+      "name": "Get Vision inventory",
+      "description": "Return a snapshot of active plants, recently processed image metadata, and relevant spread curves for one FarmBot.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot to query."
+        },
+        "image_lookback_hours": {
+          "name": "Image lookback (hours)",
+          "description": "Only include images created within this many hours. Default 72, maximum 336 (14 days)."
+        },
+        "include_all_curves": {
+          "name": "Include all curves",
+          "description": "Return every spread curve, not just ones assigned to returned plants or owned by FarmBot Vision."
+        }
+      }
+    },
+    "get_vision_image": {
+      "name": "Get Vision image",
+      "description": "Download, resize and return one FarmBot image as a base64-encoded JPEG.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot the image belongs to."
+        },
+        "image_id": {
+          "name": "Image ID",
+          "description": "ID of the FarmBot image to fetch."
+        },
+        "max_width": {
+          "name": "Max width",
+          "description": "Maximum output width in pixels. Default 640."
+        },
+        "max_height": {
+          "name": "Max height",
+          "description": "Maximum output height in pixels. Default 480."
+        }
+      }
+    },
+    "apply_vision_radius": {
+      "name": "Apply Vision radius",
+      "description": "Validate (and optionally apply) a FarmBot Vision plant-radius recommendation. The integration independently re-verifies the plant, current radius and limits before writing anything.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot the plant belongs to."
+        },
+        "plant_id": {
+          "name": "Plant ID",
+          "description": "FarmBot point ID of the plant."
+        },
+        "measurement_id": {
+          "name": "Measurement ID",
+          "description": "UUID identifying this specific recommendation, for idempotency and logging."
+        },
+        "expected_current_radius_mm": {
+          "name": "Expected current radius (mm)",
+          "description": "The radius, in millimetres, the app believes the plant currently has. Rejected if it no longer matches FarmBot."
+        },
+        "recommended_radius_mm": {
+          "name": "Recommended radius (mm)",
+          "description": "The new plant radius in millimetres (a radius, not a spread-curve diameter)."
+        },
+        "confidence": {
+          "name": "Confidence",
+          "description": "Model confidence between 0 and 1."
+        },
+        "apply": {
+          "name": "Apply",
+          "description": "If off (default), only validates and returns a dry-run result. If on, applies the change when allowed by integration options."
+        }
+      }
+    },
+    "upsert_vision_spread_curve": {
+      "name": "Upsert Vision spread curve",
+      "description": "Create or update a FarmBot Vision-owned spread curve and optionally assign it to plants. Disabled by default; enable curve writes in the integration options first.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot to update."
+        },
+        "crop_slug": {
+          "name": "Crop slug",
+          "description": "OpenFarm crop slug this curve is for."
+        },
+        "curve_id": {
+          "name": "Curve ID",
+          "description": "ID of an existing FarmBot Vision-owned spread curve to update. Leave empty to create a new curve."
+        },
+        "name": {
+          "name": "Name",
+          "description": "Curve name; must start with \"[FarmBot Vision]\"."
+        },
+        "data": {
+          "name": "Curve data",
+          "description": "Mapping of day number to plant diameter in millimetres (not radius). Up to 10 points, strictly increasing days, non-decreasing diameters."
+        },
+        "assign_to_plant_ids": {
+          "name": "Assign to plants",
+          "description": "Plant IDs to assign the resulting curve to once validated."
+        },
+        "apply": {
+          "name": "Apply",
+          "description": "If off (default), only validates and returns a dry-run result."
+        }
+      }
+    },
+    "report_vision_status": {
+      "name": "Report Vision status",
+      "description": "Report FarmBot Vision app status (heartbeat) for display on Home Assistant entities.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot this status report is for."
+        },
+        "available": {
+          "name": "Available",
+          "description": "Whether the FarmBot Vision app itself reports being available."
+        },
+        "status": {
+          "name": "Status",
+          "description": "Current job status."
+        },
+        "job_id": {
+          "name": "Job ID",
+          "description": "Identifier of the current or most recent analysis job."
+        },
+        "last_completed_at": {
+          "name": "Last completed at",
+          "description": "ISO-8601 timestamp of the last completed analysis."
+        },
+        "plants_analysed": {
+          "name": "Plants analysed",
+          "description": "Number of plants analysed in the last run."
+        },
+        "recommendations": {
+          "name": "Recommendations",
+          "description": "Number of recommendations produced."
+        },
+        "automatically_applied": {
+          "name": "Automatically applied",
+          "description": "Number of recommendations applied automatically."
+        },
+        "uncertain": {
+          "name": "Uncertain",
+          "description": "Number of plants the analysis was uncertain about."
+        },
+        "message": {
+          "name": "Message",
+          "description": "Short human-readable status message."
+        }
+      }
+    },
+    "request_vision_analysis": {
+      "name": "Request Vision analysis",
+      "description": "Fire a farmbot_vision_request event asking the FarmBot Vision app to run an analysis. Does not connect to the app directly.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot to request analysis for."
+        },
+        "plant_ids": {
+          "name": "Plant IDs",
+          "description": "Optional list of plant IDs to limit the analysis to."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Analysis mode: observe, recommend, or auto_radius."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "config_entry_not_loaded": {
+      "message": "FarmBot config entry \"{config_entry_id}\" is not loaded."
+    },
+    "farmbot_auth_error": {
+      "message": "FarmBot rejected the current credentials; reauthentication has been triggered."
+    },
+    "farmbot_api_error": {
+      "message": "FarmBot API request failed. See the Home Assistant log for details."
+    },
+    "vision_image_not_found": {
+      "message": "FarmBot image {image_id} was not found."
+    },
+    "vision_image_wrong_device": {
+      "message": "That image does not belong to this FarmBot."
+    },
+    "vision_image_not_processed": {
+      "message": "FarmBot has not finished processing that image yet."
+    },
+    "vision_image_no_attachment": {
+      "message": "That image has no downloadable attachment."
+    },
+    "vision_image_decode_failed": {
+      "message": "The downloaded image could not be decoded."
+    },
+    "vision_curve_writes_disabled": {
+      "message": "FarmBot Vision curve writes are disabled in the integration options."
+    },
+    "vision_curve_invalid": {
+      "message": "Spread curve request was rejected: {reason}."
+    },
+    "vision_curve_assignment_invalid": {
+      "message": "Cannot assign the curve to plant {plant_id}: {reason}."
     }
   }
 }
