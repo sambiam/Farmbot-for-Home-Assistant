@@ -5,6 +5,22 @@ string = str
 positive_int = vol.All(vol.Coerce(int), vol.Range(min=0))
 
 
+def boolean(value):
+    """Stand-in for cv.boolean; validates/coerces common boolean spellings."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.lower()
+        if lowered in ("1", "true", "yes", "on", "enable", "enabled"):
+            return True
+        if lowered in ("0", "false", "no", "off", "disable", "disabled"):
+            return False
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value in (0, 1):
+            return bool(value)
+    raise vol.Invalid(f"invalid boolean value {value!r}")
+
+
 def empty_config_schema(domain):
     """Stand-in for cv.empty_config_schema; real HA returns a voluptuous schema."""
     return vol.Schema({}, extra=vol.ALLOW_EXTRA)

@@ -41,3 +41,202 @@ move_to:
           min: 1
           max: 100
           mode: slider
+
+list_vision_bots:
+  fields: {}
+
+get_vision_inventory:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    image_lookback_hours:
+      example: 72
+      selector:
+        number:
+          min: 0
+          max: 336
+          mode: box
+    include_all_curves:
+      selector:
+        boolean:
+
+get_vision_image:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    image_id:
+      required: true
+      example: 12345
+      selector:
+        number:
+          min: 1
+          mode: box
+    max_width:
+      example: 640
+      selector:
+        number:
+          min: 32
+          max: 4096
+          mode: box
+    max_height:
+      example: 480
+      selector:
+        number:
+          min: 32
+          max: 4096
+          mode: box
+
+apply_vision_radius:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    plant_id:
+      required: true
+      example: 4567
+      selector:
+        number:
+          min: 1
+          mode: box
+    measurement_id:
+      required: true
+      example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+      selector:
+        text:
+    expected_current_radius_mm:
+      required: true
+      example: 120
+      selector:
+        number:
+          mode: box
+          step: any
+    recommended_radius_mm:
+      required: true
+      example: 185
+      selector:
+        number:
+          mode: box
+          step: any
+    confidence:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+          mode: slider
+    apply:
+      selector:
+        boolean:
+
+upsert_vision_spread_curve:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    crop_slug:
+      required: true
+      example: "tomato"
+      selector:
+        text:
+    curve_id:
+      selector:
+        number:
+          min: 1
+          mode: box
+    name:
+      required: true
+      example: "[FarmBot Vision] Tomato"
+      selector:
+        text:
+    data:
+      required: true
+      selector:
+        object:
+    assign_to_plant_ids:
+      selector:
+        text:
+          multiple: true
+    apply:
+      selector:
+        boolean:
+
+report_vision_status:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    available:
+      required: true
+      selector:
+        boolean:
+    status:
+      required: true
+      selector:
+        select:
+          options:
+            - unavailable
+            - idle
+            - running
+            - warning
+            - error
+    job_id:
+      selector:
+        text:
+    last_completed_at:
+      selector:
+        datetime:
+    plants_analysed:
+      selector:
+        number:
+          min: 0
+          mode: box
+    recommendations:
+      selector:
+        number:
+          min: 0
+          mode: box
+    automatically_applied:
+      selector:
+        number:
+          min: 0
+          mode: box
+    uncertain:
+      selector:
+        number:
+          min: 0
+          mode: box
+    message:
+      selector:
+        text:
+
+request_vision_analysis:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    plant_ids:
+      selector:
+        text:
+          multiple: true
+    mode:
+      selector:
+        select:
+          options:
+            - observe
+            - recommend
+            - auto_radius

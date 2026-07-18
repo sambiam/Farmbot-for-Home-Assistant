@@ -1,10 +1,11 @@
 """Minimal stand-in for homeassistant.config_entries.
 
-Reimplements just enough of ``ConfigFlow`` (unique-id de-duplication,
-form/entry/abort results, reauth-update-and-abort) to exercise
-custom_components/farmbot/config_flow.py's behaviour in isolation. Mirrors
-the real Home Assistant semantics closely enough to be a faithful test
-double, but is not a substitute for testing against real Home Assistant.
+Reimplements just enough of ``ConfigFlow``/``OptionsFlow`` (unique-id
+de-duplication, form/entry/abort results, reauth-update-and-abort, options
+storage) to exercise custom_components/farmbot/config_flow.py's behaviour
+in isolation. Mirrors the real Home Assistant semantics closely enough to
+be a faithful test double, but is not a substitute for testing against
+real Home Assistant.
 """
 from .data_entry_flow import AbortFlow
 
@@ -14,13 +15,40 @@ SOURCE_REAUTH = "reauth"
 class ConfigEntry:
     """A bare-bones stand-in for a loaded config entry."""
 
-    def __init__(self, entry_id, unique_id=None, data=None, domain=None, title=None, version=1):
+    def __init__(
+        self,
+        entry_id,
+        unique_id=None,
+        data=None,
+        domain=None,
+        title=None,
+        version=1,
+        options=None,
+    ):
         self.entry_id = entry_id
         self.unique_id = unique_id
         self.data = dict(data or {})
         self.domain = domain
         self.title = title
         self.version = version
+        self.options = dict(options or {})
+        self._on_unload = []
+        self._update_listeners = []
+
+    def async_on_unload(self, func):
+        """Stand-in for ConfigEntry.async_on_unload; records `func` to call on unload."""
+        self._on_unload.append(func)
+        return func
+
+    def add_update_listener(self, listener):
+        """Stand-in for ConfigEntry.add_update_listener; returns an unsub callable."""
+        self._update_listeners.append(listener)
+
+        def _unsub():
+            if listener in self._update_listeners:
+                self._update_listeners.remove(listener)
+
+        return _unsub
 
 
 class ConfigEntries:
@@ -37,13 +65,15 @@ class ConfigEntries:
     def async_get_entry(self, entry_id):
         return next((e for e in self._entries if e.entry_id == entry_id), None)
 
-    def async_update_entry(self, entry, data=None, unique_id=None, version=None, **kwargs):
+    def async_update_entry(self, entry, data=None, unique_id=None, version=None, options=None, **kwargs):
         if data is not None:
             entry.data = dict(data)
         if unique_id is not None:
             entry.unique_id = unique_id
         if version is not None:
             entry.version = version
+        if options is not None:
+            entry.options = dict(options)
 
 
 class ConfigFlow:
@@ -97,3 +127,28 @@ class ConfigFlow:
         elif data is not None:
             entry.data = dict(data)
         return self.async_abort(reason=reason)
+
+
+class OptionsFlow:
+    """Stand-in for ``homeassistant.config_entries.OptionsFlow``.
+
+    Real Home Assistant (2024.12+) sets ``self.config_entry`` automatically
+    before a step is called; this stub's ``FakeConfigEntries``-driven tests
+    set it explicitly on the instance after construction instead.
+    """
+
+    def __init__(self):
+        self.config_entry = None
+        self.hass = None
+
+    def async_show_form(self, *, step_id, data_schema=None, errors=None, description_placeholders=None):
+        return {
+            "type": "form",
+            "step_id": step_id,
+            "data_schema": data_schema,
+            "errors": errors or {},
+            "description_placeholders": description_placeholders,
+        }
+
+    def async_create_entry(self, *, title, data):
+        return {"type": "create_entry", "title": title, "data": data}

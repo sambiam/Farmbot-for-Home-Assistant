@@ -3,9 +3,14 @@
 import logging
 from datetime import timedelta
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
-from .const import DOMAIN
+from .const import DOMAIN, SIGNAL_VISION_STATE
 from .entity import FarmbotEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,9 +25,13 @@ async def async_setup_entry(hass, entry, async_add_entities):
         FarmbotCoordinateSensor(manager, "x"),
         FarmbotCoordinateSensor(manager, "y"),
         FarmbotCoordinateSensor(manager, "z"),
+        FarmbotVisionStatusSensor(manager),
+        FarmbotVisionLastAnalysisSensor(manager),
+        FarmbotVisionRecommendationsSensor(manager),
+        FarmbotVisionUncertainPlantsSensor(manager),
     ]
     async_add_entities(sensors)
-    _LOGGER.debug("Added 3 FarmBot coordinate sensors (polling every 5s)")
+    _LOGGER.debug("Added %d FarmBot sensors", len(sensors))
 
 class FarmbotCoordinateSensor(FarmbotEntity, SensorEntity):
     """Polling-based sensor for one axis of FarmBot’s position."""
@@ -63,3 +72,100 @@ class FarmbotCoordinateSensor(FarmbotEntity, SensorEntity):
             _LOGGER.debug("Sensor %s: %s → %s", self._axis, self._state, val)
             self._state = val
             self.async_write_ha_state()
+
+
+class _FarmbotVisionSensor(FarmbotEntity, SensorEntity):
+    """Base class for the dispatch-driven FarmBot Vision sensors.
+
+    Vision sensors are never polled: they only update when
+    farmbot.report_vision_status stores a new value on the manager and
+    dispatches SIGNAL_VISION_STATE.
+    """
+
+    _attr_should_poll = False
+
+    async def async_added_to_hass(self):
+        unsub = async_dispatcher_connect(self.hass, SIGNAL_VISION_STATE, self._handle_update)
+        self.async_on_remove(unsub)
+
+    def _handle_update(self):
+        self.schedule_update_ha_state()
+
+
+class FarmbotVisionStatusSensor(_FarmbotVisionSensor):
+    """Last-reported FarmBot Vision job status."""
+
+    @property
+    def unique_id(self):
+        return f"{self._manager.device_id}_vision_status"
+
+    @property
+    def name(self):
+        return "FarmBot Vision Status"
+
+    @property
+    def native_value(self):
+        if not self._manager.vision_is_available():
+            return "unavailable"
+        return self._manager.vision_status
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "job_id": self._manager.vision_job_id,
+            "message": self._manager.vision_message,
+        }
+
+
+class FarmbotVisionLastAnalysisSensor(_FarmbotVisionSensor):
+    """Timestamp of the last completed FarmBot Vision analysis."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    @property
+    def unique_id(self):
+        return f"{self._manager.device_id}_vision_last_analysis"
+
+    @property
+    def name(self):
+        return "FarmBot Vision Last Analysis"
+
+    @property
+    def native_value(self):
+        return self._manager.vision_last_completed_at
+
+
+class FarmbotVisionRecommendationsSensor(_FarmbotVisionSensor):
+    """Count of plant-radius recommendations from the last analysis."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def unique_id(self):
+        return f"{self._manager.device_id}_vision_recommendations"
+
+    @property
+    def name(self):
+        return "FarmBot Vision Recommendations"
+
+    @property
+    def native_value(self):
+        return self._manager.vision_recommendations
+
+
+class FarmbotVisionUncertainPlantsSensor(_FarmbotVisionSensor):
+    """Count of plants the last FarmBot Vision analysis was uncertain about."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def unique_id(self):
+        return f"{self._manager.device_id}_vision_uncertain_plants"
+
+    @property
+    def name(self):
+        return "FarmBot Vision Uncertain Plants"
+
+    @property
+    def native_value(self):
+        return self._manager.vision_uncertain

@@ -4,8 +4,24 @@ import logging
 import requests
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
 
-from .const import API_BASE_URL, DOMAIN
+from .const import (
+    API_BASE_URL,
+    DEFAULT_ALLOW_AUTOMATIC_RADIUS_INCREASES,
+    DEFAULT_ALLOW_VISION_CURVE_WRITES,
+    DEFAULT_MAXIMUM_PLANT_RADIUS_MM,
+    DEFAULT_MINIMUM_AUTOMATIC_CONFIDENCE,
+    DEFAULT_VISION_ENABLED,
+    DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+    DOMAIN,
+    OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
+    OPTION_ALLOW_VISION_CURVE_WRITES,
+    OPTION_MAXIMUM_PLANT_RADIUS_MM,
+    OPTION_MINIMUM_AUTOMATIC_CONFIDENCE,
+    OPTION_VISION_ENABLED,
+    OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,6 +77,12 @@ class FarmbotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a FarmBot config flow."""
 
     VERSION = 2
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        """Return the FarmBot Vision bridge options flow."""
+        return FarmbotOptionsFlow()
 
     async def async_step_user(self, user_input=None):
         """Handle the initial step."""
@@ -182,4 +204,56 @@ class FarmbotConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "device_id": self._reauth_entry.data.get("device_id", "unknown")
             },
         )
+
+
+class FarmbotOptionsFlow(config_entries.OptionsFlow):
+    """FarmBot Vision bridge options: no FarmBot credentials are re-entered here."""
+
+    async def async_step_init(self, user_input=None):
+        """Show/save the FarmBot Vision bridge safety and feature options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current = self.config_entry.options
+        data_schema = vol.Schema(
+            {
+                vol.Optional(
+                    OPTION_VISION_ENABLED,
+                    default=current.get(OPTION_VISION_ENABLED, DEFAULT_VISION_ENABLED),
+                ): bool,
+                vol.Optional(
+                    OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+                    default=current.get(
+                        OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+                        DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=120)),
+                vol.Optional(
+                    OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
+                    default=current.get(
+                        OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
+                        DEFAULT_ALLOW_AUTOMATIC_RADIUS_INCREASES,
+                    ),
+                ): bool,
+                vol.Optional(
+                    OPTION_ALLOW_VISION_CURVE_WRITES,
+                    default=current.get(
+                        OPTION_ALLOW_VISION_CURVE_WRITES, DEFAULT_ALLOW_VISION_CURVE_WRITES
+                    ),
+                ): bool,
+                vol.Optional(
+                    OPTION_MAXIMUM_PLANT_RADIUS_MM,
+                    default=current.get(
+                        OPTION_MAXIMUM_PLANT_RADIUS_MM, DEFAULT_MAXIMUM_PLANT_RADIUS_MM
+                    ),
+                ): vol.All(vol.Coerce(float), vol.Range(min=1, max=5000)),
+                vol.Optional(
+                    OPTION_MINIMUM_AUTOMATIC_CONFIDENCE,
+                    default=current.get(
+                        OPTION_MINIMUM_AUTOMATIC_CONFIDENCE, DEFAULT_MINIMUM_AUTOMATIC_CONFIDENCE
+                    ),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=data_schema)
 

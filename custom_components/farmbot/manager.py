@@ -1,25 +1,41 @@
-import base64
 import json
 import logging
 import ssl
 import time
 import uuid
-from typing import Optional, Tuple
+from datetime import timedelta
+from typing import Any, Optional, Tuple
 
 import paho.mqtt.client as mqtt
 import requests
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.util import dt as dt_util
 
+from .api import FarmbotApiClient
 from .const import (
     API_BASE_URL,
+    DEFAULT_ALLOW_AUTOMATIC_RADIUS_INCREASES,
+    DEFAULT_ALLOW_VISION_CURVE_WRITES,
+    DEFAULT_MAXIMUM_PLANT_RADIUS_MM,
+    DEFAULT_MINIMUM_AUTOMATIC_CONFIDENCE,
+    DEFAULT_VISION_ENABLED,
+    DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
     MQTT_PORT,
+    OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
+    OPTION_ALLOW_VISION_CURVE_WRITES,
+    OPTION_MAXIMUM_PLANT_RADIUS_MM,
+    OPTION_MINIMUM_AUTOMATIC_CONFIDENCE,
+    OPTION_VISION_ENABLED,
+    OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES,
     SIGNAL_STATE,
+    SIGNAL_VISION_STATE,
     TOKEN_REFRESH_WINDOW,
     TOPIC_COMMAND,
     TOPIC_LOGS,
     TOPIC_STATUS,
 )
+from .jwt_util import decode_jwt_payload
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,23 +67,6 @@ def _split_host_port(raw_host: str, default_port: int) -> Tuple[str, int]:
             host, port = h, int(p)
     return host, port
 
-def _decode_jwt_payload(token: str) -> Optional[dict]:
-    """Decode JWT payload without signature verification."""
-    try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return None
-        # Add padding if needed
-        payload_b64 = parts[1]
-        padding = 4 - (len(payload_b64) % 4)
-        if padding != 4:
-            payload_b64 += "=" * padding
-        payload_bytes = base64.urlsafe_b64decode(payload_b64)
-        return json.loads(payload_bytes)
-    except Exception as e:
-        _LOGGER.debug("Failed to decode JWT payload: %s", e)
-        return None
-
 class FarmbotManager:
     """Central manager for FarmBot integration over MQTT."""
 
@@ -78,16 +77,36 @@ class FarmbotManager:
         self.mqtt_host_raw = str(mqtt_host).strip()     # must come from token.unencoded.mqtt
         self.status: dict = {}
         self.device_name = f"FarmBot {self.device_id}"
+        self.entry_id: Optional[str] = (
+            getattr(entry, "entry_id", None) if entry is not None else None
+        )
         self._mqtt: Optional[mqtt.Client] = None
         self._entry = entry  # ConfigEntry reference for updates and reauth
         self._auth_failed = False  # Track auth failure to prevent spam
         self._last_bad_auth_log_time = 0  # Rate-limit bad-auth logging
         # Do not connect here; async_setup_entry will await connect_mqtt()
 
+        # -------------------- FarmBot Vision bridge runtime state --------------------
+        self.api = FarmbotApiClient(
+            hass, self.token, self.device_id, reauth_callback=self._trigger_reauth_from_async
+        )
+        self.vision_last_heartbeat: Optional[Any] = None
+        self.vision_app_version: Optional[str] = None
+        self.vision_app_reported_available: Optional[bool] = None
+        self.vision_status: str = "unavailable"
+        self.vision_job_id: Optional[str] = None
+        self.vision_message: Optional[str] = None
+        self.vision_last_completed_at: Optional[Any] = None
+        self.vision_plants_analysed: int = 0
+        self.vision_recommendations: int = 0
+        self.vision_automatically_applied: int = 0
+        self.vision_uncertain: int = 0
+        self._last_vision_report_snapshot: Optional[tuple] = None
+
     # -------------------- Token Refresh --------------------
     def _should_refresh_token(self) -> bool:
         """Check if token needs refresh based on expiry."""
-        payload = _decode_jwt_payload(self.token)
+        payload = decode_jwt_payload(self.token)
         if not payload:
             _LOGGER.warning("Unable to decode token payload for expiry check")
             return False
@@ -152,6 +171,7 @@ class FarmbotManager:
                     self.token = new_encoded
                     self.device_id = new_device_id
                     self.mqtt_host_raw = new_mqtt_host
+                    self.api.update_token(new_encoded)
 
                     # Reconnect MQTT with new credentials
                     _LOGGER.info("Reconnecting MQTT with refreshed token")
@@ -378,4 +398,117 @@ class FarmbotManager:
             for p in pins:
                 if str(p.get("number")) == str(pin):
                     return p.get("value")
+        return None
+
+    # -------------------- FarmBot Vision bridge --------------------
+
+    def _trigger_reauth_from_async(self) -> None:
+        """Reauth trigger for callbacks invoked directly on the event loop.
+
+        Used by FarmbotApiClient (all of whose calls run on the event
+        loop), as opposed to the executor-thread callers (MQTT, blocking
+        HTTP) that must hop back onto the loop via call_soon_threadsafe.
+        Shares ``_auth_failed`` with those other triggers so a FarmBot
+        auth failure detected anywhere only starts reauth once.
+        """
+        if self._entry and not self._auth_failed:
+            _LOGGER.warning("FarmBot API authentication failed, triggering reauth flow")
+            self._auth_failed = True
+            self._entry.async_start_reauth(self.hass)
+
+    def vision_options(self) -> dict:
+        """Return FarmBot Vision integration options, merged with defaults."""
+        options = dict(self._entry.options) if self._entry is not None else {}
+        return {
+            OPTION_VISION_ENABLED: options.get(OPTION_VISION_ENABLED, DEFAULT_VISION_ENABLED),
+            OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES: options.get(
+                OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+                DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+            ),
+            OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES: options.get(
+                OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
+                DEFAULT_ALLOW_AUTOMATIC_RADIUS_INCREASES,
+            ),
+            OPTION_ALLOW_VISION_CURVE_WRITES: options.get(
+                OPTION_ALLOW_VISION_CURVE_WRITES, DEFAULT_ALLOW_VISION_CURVE_WRITES
+            ),
+            OPTION_MAXIMUM_PLANT_RADIUS_MM: options.get(
+                OPTION_MAXIMUM_PLANT_RADIUS_MM, DEFAULT_MAXIMUM_PLANT_RADIUS_MM
+            ),
+            OPTION_MINIMUM_AUTOMATIC_CONFIDENCE: options.get(
+                OPTION_MINIMUM_AUTOMATIC_CONFIDENCE, DEFAULT_MINIMUM_AUTOMATIC_CONFIDENCE
+            ),
+        }
+
+    def vision_is_available(self, *, now=None) -> bool:
+        """True when a FarmBot Vision heartbeat was received within the timeout."""
+        if self.vision_last_heartbeat is None:
+            return False
+        now = now or dt_util.utcnow()
+        timeout_minutes = self.vision_options()[OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES]
+        return (now - self.vision_last_heartbeat) < timedelta(minutes=timeout_minutes)
+
+    def update_vision_status(
+        self,
+        *,
+        available: Optional[bool] = None,
+        status: str = "idle",
+        job_id: Optional[str] = None,
+        last_completed_at=None,
+        plants_analysed: Optional[int] = None,
+        recommendations: Optional[int] = None,
+        automatically_applied: Optional[int] = None,
+        uncertain: Optional[int] = None,
+        message: Optional[str] = None,
+        app_version: Optional[str] = None,
+    ) -> bool:
+        """Record a FarmBot Vision status report (a heartbeat).
+
+        Real availability is derived from heartbeat recency
+        (``vision_is_available``), not from the app's self-reported
+        ``available`` flag -- that value is stored only as an attribute,
+        never trusted as the source of truth. Returns True if any
+        reported value actually changed, so callers can skip redundant
+        entity dispatch for identical repeated reports.
+        """
+        self.vision_last_heartbeat = dt_util.utcnow()
+        self.vision_app_reported_available = available
+
+        snapshot = (
+            status, job_id, last_completed_at, plants_analysed, recommendations,
+            automatically_applied, uncertain, message, app_version,
+        )
+        changed = snapshot != self._last_vision_report_snapshot
+        self._last_vision_report_snapshot = snapshot
+
+        self.vision_status = status
+        self.vision_job_id = job_id
+        self.vision_message = message
+        self.vision_app_version = app_version
+        if last_completed_at is not None:
+            parsed = dt_util.parse_datetime(str(last_completed_at))
+            if parsed is not None:
+                self.vision_last_completed_at = parsed
+        if plants_analysed is not None:
+            self.vision_plants_analysed = plants_analysed
+        if recommendations is not None:
+            self.vision_recommendations = recommendations
+        if automatically_applied is not None:
+            self.vision_automatically_applied = automatically_applied
+        if uncertain is not None:
+            self.vision_uncertain = uncertain
+
+        if changed:
+            async_dispatcher_send(self.hass, SIGNAL_VISION_STATE)
+        return changed
+
+    async def async_close(self) -> None:
+        """Release any FarmBot resources owned exclusively by this manager.
+
+        The REST client reuses Home Assistant's shared aiohttp session,
+        which Home Assistant itself owns and closes; there is nothing
+        entry-specific to close today. Kept as an explicit hook so a
+        future FarmBot-owned resource has an obvious place to release on
+        unload.
+        """
         return None
