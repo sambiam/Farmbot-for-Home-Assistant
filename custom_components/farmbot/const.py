@@ -80,7 +80,18 @@ MAX_IMAGE_LOOKBACK_HOURS = 24 * 14  # two weeks
 # Image resize defaults for farmbot.get_vision_image
 DEFAULT_IMAGE_MAX_WIDTH = 640
 DEFAULT_IMAGE_MAX_HEIGHT = 480
+# Hard upper bound on a requested output bounding-box side. Comfortably above
+# the analysis resolutions the FarmBot Vision app asks for (640x480, 960x720,
+# 1280x960) and the native FarmBot camera (2592x1944), but still bounded so a
+# caller can never request an arbitrarily large re-encode.
 MAX_IMAGE_DIMENSION = 4096
+
+# Decompression-bomb guards applied to the *decoded* source image, before any
+# resize. A native FarmBot frame is 2592x1944 (~5 MP); these limits leave
+# generous headroom for larger cameras while rejecting images whose pixel
+# geometry would blow up memory regardless of how small the compressed file is.
+MAX_SOURCE_IMAGE_DIMENSION = 12000
+MAX_SOURCE_IMAGE_PIXELS = 60_000_000  # 60 MP
 
 # HTTP client limits/behaviour (custom_components/farmbot/api.py)
 HTTP_TIMEOUT_SECONDS = 15

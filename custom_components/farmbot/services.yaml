@@ -64,6 +64,11 @@ get_vision_inventory:
         boolean:
 
 get_vision_image:
+  # Returns a base64 JPEG plus scaling metadata (source/oriented/output
+  # dimensions, resize_scale_x/y), sha256 of the RETURNED JPEG, optional
+  # source_sha256, and processed_calibration. The image is fitted inside the
+  # max_width x max_height box (aspect ratio preserved, never upscaled).
+  # Common analysis boxes: 640x480, 960x720, 1280x960.
   fields:
     config_entry_id:
       required: true
@@ -78,14 +83,14 @@ get_vision_image:
           min: 1
           mode: box
     max_width:
-      example: 640
+      example: 960
       selector:
         number:
           min: 32
           max: 4096
           mode: box
     max_height:
-      example: 480
+      example: 720
       selector:
         number:
           min: 32

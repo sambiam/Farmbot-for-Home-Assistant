@@ -50,7 +50,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install ruff
         run: pip install ruff==0.15.21
@@ -68,7 +68,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Compile-check all Python files
         run: python -m compileall -q custom_components tests
@@ -89,10 +89,80 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          # Home Assistant Core 2026.7.x requires Python >= 3.14.2.
+          python-version: "3.14"
 
       - name: Install test dependencies
         run: pip install pytest==8.3.5 -r requirements-test.txt
 
       - name: Run pytest
         run: pytest -q
+
+      # Guard the returned-JPEG checksum contract explicitly so a regression
+      # (sha256 hashing the source instead of the returned JPEG) fails CI even
+      # if someone deletes the assertions elsewhere.
+      - name: Verify returned-JPEG checksum contract
+        run: >-
+          pytest -q
+          "tests/test_image_utils.py::test_process_image_sha256_is_over_returned_jpeg_not_original"
+          "tests/test_vision_services.py::test_get_vision_image_returns_resized_base64_jpeg_without_leaking_secrets"
+
+  dependencies:
+    name: Requirements install (target HA env)
+    runs-on: ubuntu-latest
+    env:
+      # Home Assistant Core release whose Python + constraints this integration
+      # targets. Bump alongside the manifest/README when the target moves.
+      HA_CORE_VERSION: "2026.7.0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Must match Home Assistant Core 2026.7.x's requires-python (>=3.14.2).
+          python-version: "3.14"
+
+      - name: Fetch Home Assistant Core package constraints
+        run: >-
+          curl -fsSL
+          "https://raw.githubusercontent.com/home-assistant/core/${HA_CORE_VERSION}/homeassistant/package_constraints.txt"
+          -o ha_constraints.txt
+
+      - name: Extract manifest requirements
+        run: |
+          python - <<'PY'
+          import json
+          reqs = json.load(open("custom_components/farmbot/manifest.json"))["requirements"]
+          open("manifest_requirements.txt", "w").write("\n".join(reqs) + "\n")
+          print("Manifest requirements:", reqs)
+          PY
+
+      # This is the exact operation Home Assistant performs at setup time:
+      # install the integration's requirements with Core's constraint file
+      # applied. With Pillow removed from the manifest this resolves cleanly;
+      # re-adding a Pillow pin that conflicts with Core's Pillow==12.2.0
+      # constraint makes this step fail, reproducing the reported setup error.
+      - name: Install manifest requirements under Core constraints
+        run: pip install -r manifest_requirements.txt -c ha_constraints.txt
+
+      - name: Install Core-provided Pillow under constraints
+        # Home Assistant Core provides Pillow; installing it under the same
+        # constraints proves the version the integration relies on resolves.
+        run: pip install "Pillow" -c ha_constraints.txt
+
+      - name: Verify PIL import surface
+        run: python -c "from PIL import Image, ImageOps; print('PIL OK', Image.__name__, ImageOps.__name__)"
+
+      - name: Verify prebuilt aarch64 wheels exist (no source compile on HA OS)
+        run: |
+          set -e
+          PILLOW_PIN=$(grep -i '^Pillow==' ha_constraints.txt | head -n1)
+          echo "Checking aarch64 wheels for: manifest reqs + ${PILLOW_PIN}"
+          pip download --only-binary=:all: \
+            --platform manylinux2014_aarch64 \
+            --python-version 3.14 --implementation cp --abi cp314 \
+            --no-deps -d /tmp/aarch64-wheels \
+            -r manifest_requirements.txt "${PILLOW_PIN}"
+          ls -1 /tmp/aarch64-wheels

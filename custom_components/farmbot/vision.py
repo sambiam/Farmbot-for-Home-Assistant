@@ -210,6 +210,182 @@ def select_relevant_curves(
     ]
 
 
+# -------------------- camera calibration --------------------
+#
+# FarmBot stores camera calibration as loose "farmware env" key/value pairs
+# (the CAMERA_CALIBRATION_* keys). Their meaning and units were verified
+# against FarmBot's own plant-detection Farmware, the reference
+# implementation for this naming convention
+# (github.com/FarmBot-Labs/plant-detection, plant_detection/P2C.py):
+#
+#   coord_scale                -- millimetres per pixel (mm/px). In P2C the
+#                                 pixel->coordinate conversion multiplies a
+#                                 pixel offset by coord_scale to get mm, and it
+#                                 is derived as known_mm_separation / pixel_
+#                                 separation. Pixels-per-mm is therefore its
+#                                 reciprocal, 1 / coord_scale. FarmBot uses a
+#                                 single isotropic scale, so x and y share it.
+#   center_pixel_location_x/y  -- the pixel coordinates of the image centre, in
+#                                 the native (EXIF-oriented) capture resolution,
+#                                 computed by FarmBot as int(dimension / 2). The
+#                                 native reference dimensions are therefore
+#                                 2 * center_pixel_location (see note below).
+#   total_rotation_angle       -- degrees; FarmBot applies it as a whole-image
+#                                 rotation to align the camera with the bed.
+#                                 Passed through unchanged; sign follows
+#                                 FarmBot's stored convention.
+#   camera_offset_x/y          -- millimetre offset from the bot (UTM) position
+#                                 to the camera centre, in FarmBot coordinates.
+#   camera_z                   -- the Z height (mm) at which calibration was
+#                                 captured; retained for reference only.
+#
+# The normalized ``basis`` is ``"oriented_native_image"``: FarmBot camera
+# frames carry no EXIF orientation, so the oriented native image is the raw
+# capture, and that is the coordinate system these values describe.
+
+_CAMERA_CALIBRATION_MIN_REFERENCE_DIMENSION = 2  # center*2 must yield a real image
+CAMERA_CALIBRATION_BASIS = "oriented_native_image"
+PROCESSED_CALIBRATION_BASIS = "processed_image"
+
+
+def normalize_camera_calibration(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Convert raw FarmBot CAMERA_CALIBRATION_* values into normalized fields.
+
+    Returns the structure the FarmBot Vision companion app expects, with
+    unambiguous units (pixels-per-mm, millimetres, degrees) and explicit
+    native reference dimensions. Returns ``{"available": False}`` whenever the
+    raw values are missing, non-finite, or cannot be converted safely --
+    missing values are never manufactured, and raw fields are never surfaced
+    under names the app would misinterpret. This preserves the companion
+    app's manual-calibration fallback: an unavailable result tells it to fall
+    back rather than trust a guess.
+    """
+    if not isinstance(raw, dict) or not raw.get("available"):
+        return {"available": False}
+
+    coord_scale = raw.get("coord_scale")
+    center_x = raw.get("center_pixel_location_x")
+    center_y = raw.get("center_pixel_location_y")
+
+    # coord_scale is mm/px; pixels-per-mm is its reciprocal and must be finite
+    # and strictly positive.
+    if not _is_finite_positive_number(coord_scale):
+        return {"available": False}
+    pixels_per_mm = 1.0 / coord_scale
+    if not math.isfinite(pixels_per_mm) or pixels_per_mm <= 0:
+        return {"available": False}
+
+    # The native reference dimensions are derived from the calibration image
+    # centre (FarmBot stores centre = int(dimension / 2)). Without a usable
+    # centre we cannot describe which coordinate system this calibration
+    # belongs to, so we report it unavailable rather than guess.
+    if not _is_finite_positive_number(center_x) or not _is_finite_positive_number(center_y):
+        return {"available": False}
+    reference_width = int(round(center_x * 2))
+    reference_height = int(round(center_y * 2))
+    if (
+        reference_width < _CAMERA_CALIBRATION_MIN_REFERENCE_DIMENSION
+        or reference_height < _CAMERA_CALIBRATION_MIN_REFERENCE_DIMENSION
+    ):
+        return {"available": False}
+
+    rotation = raw.get("total_rotation_angle", 0.0)
+    if not isinstance(rotation, (int, float)) or isinstance(rotation, bool) or not math.isfinite(
+        rotation
+    ):
+        return {"available": False}
+
+    # Offsets are optional in FarmBot's stored env and genuinely default to 0
+    # mm (camera mounted at the UTM). A present-but-non-finite offset is an
+    # error, not a benign default, so it makes the whole calibration
+    # unavailable rather than being silently zeroed.
+    offset_x = _optional_finite_number(raw.get("camera_offset_x"))
+    offset_y = _optional_finite_number(raw.get("camera_offset_y"))
+    if offset_x is None or offset_y is None:
+        return {"available": False}
+
+    return {
+        "available": True,
+        "pixels_per_mm_x": pixels_per_mm,
+        "pixels_per_mm_y": pixels_per_mm,
+        "rotation_degrees": float(rotation),
+        "offset_x_mm": offset_x,
+        "offset_y_mm": offset_y,
+        "reference_width": reference_width,
+        "reference_height": reference_height,
+        "basis": CAMERA_CALIBRATION_BASIS,
+    }
+
+
+def compute_processed_calibration(
+    normalized: dict[str, Any] | None,
+    *,
+    oriented_width: int,
+    oriented_height: int,
+    processed_width: int,
+    processed_height: int,
+) -> dict[str, Any]:
+    """Rescale normalized native calibration to the returned processed image.
+
+    ``pixels_per_mm`` scales linearly with resolution::
+
+        processed_pixels_per_mm_x = reference_pixels_per_mm_x
+                                    * processed_width / reference_width
+
+    and likewise for y. Rotation and millimetre offsets are resolution
+    independent and carry through unchanged.
+
+    Returns ``{"available": False, "basis": "processed_image"}`` unless the
+    source orientation is understood (the oriented native dimensions match the
+    calibration's reference dimensions), the scaling is valid, and every
+    resulting value is finite and positive -- so the companion app never has
+    to guess which image coordinate system a calibration belongs to.
+    """
+    unavailable = {"available": False, "basis": PROCESSED_CALIBRATION_BASIS}
+
+    if not isinstance(normalized, dict) or not normalized.get("available"):
+        return unavailable
+
+    reference_width = normalized.get("reference_width")
+    reference_height = normalized.get("reference_height")
+    ref_ppm_x = normalized.get("pixels_per_mm_x")
+    ref_ppm_y = normalized.get("pixels_per_mm_y")
+
+    if not _is_positive_int(reference_width) or not _is_positive_int(reference_height):
+        return unavailable
+    if not _is_positive_int(oriented_width) or not _is_positive_int(oriented_height):
+        return unavailable
+    if not _is_positive_int(processed_width) or not _is_positive_int(processed_height):
+        return unavailable
+    if not _is_finite_positive_number(ref_ppm_x) or not _is_finite_positive_number(ref_ppm_y):
+        return unavailable
+
+    # The oriented native image must be the exact coordinate system the
+    # calibration was captured in; otherwise the reference pixels-per-mm does
+    # not apply to this frame and we must not rescale it.
+    if oriented_width != reference_width or oriented_height != reference_height:
+        return unavailable
+
+    processed_ppm_x = ref_ppm_x * processed_width / reference_width
+    processed_ppm_y = ref_ppm_y * processed_height / reference_height
+    if not (math.isfinite(processed_ppm_x) and processed_ppm_x > 0):
+        return unavailable
+    if not (math.isfinite(processed_ppm_y) and processed_ppm_y > 0):
+        return unavailable
+
+    return {
+        "available": True,
+        "pixels_per_mm_x": processed_ppm_x,
+        "pixels_per_mm_y": processed_ppm_y,
+        "rotation_degrees": float(normalized.get("rotation_degrees", 0.0)),
+        "offset_x_mm": float(normalized.get("offset_x_mm", 0.0)),
+        "offset_y_mm": float(normalized.get("offset_y_mm", 0.0)),
+        "basis": PROCESSED_CALIBRATION_BASIS,
+        "width": processed_width,
+        "height": processed_height,
+    }
+
+
 # -------------------- unit conversion --------------------
 
 def radius_mm_to_diameter_mm(radius_mm: float) -> float:
@@ -236,6 +412,25 @@ def _is_finite_positive_number(value: Any) -> bool:
     if math.isnan(value) or math.isinf(value):
         return False
     return value > 0
+
+
+def _is_positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _optional_finite_number(value: Any) -> float | None:
+    """Return ``value`` as a float when absent (->0.0) or finite; else ``None``.
+
+    ``None``/missing is a benign default of 0.0; a present but non-finite or
+    non-numeric value is an error signalled by returning ``None``.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value):
+        return None
+    return float(value)
 
 
 def validate_radius_change(

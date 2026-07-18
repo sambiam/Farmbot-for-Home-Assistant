@@ -104,7 +104,7 @@
     },
     "get_vision_image": {
       "name": "Get Vision image",
-      "description": "Download, resize and return one FarmBot image as a base64-encoded JPEG.",
+      "description": "Download, EXIF-correct, resize and return one FarmBot image as a base64-encoded JPEG, with scaling metadata and rescaled camera calibration. sha256 is the hash of the returned JPEG (source_sha256 optionally covers the original download).",
       "fields": {
         "config_entry_id": {
           "name": "FarmBot",
@@ -116,11 +116,11 @@
         },
         "max_width": {
           "name": "Max width",
-          "description": "Maximum output width in pixels. Default 640."
+          "description": "Output bounding-box width in pixels; the image is fitted inside it without upscaling. Default 640 (e.g. 640, 960 or 1280 for common analysis resolutions). Max 4096."
         },
         "max_height": {
           "name": "Max height",
-          "description": "Maximum output height in pixels. Default 480."
+          "description": "Output bounding-box height in pixels; the image is fitted inside it without upscaling. Default 480 (e.g. 480, 720 or 960). Max 4096."
         }
       }
     },
