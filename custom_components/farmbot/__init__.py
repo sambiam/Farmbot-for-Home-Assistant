@@ -388,17 +388,6 @@ def _async_register_services(hass: HomeAssistant) -> None:
             image_id, processed.oriented_width, processed.oriented_height,
             processed.width, processed.height, len(processed.jpeg_bytes),
         )
-        # Best-effort processed-image calibration tied to these exact pixels.
-        reference = vision.map_camera_calibration(
-            await _safe_api_call(
-                manager,
-                manager.api.async_get_camera_calibration(),
-                context="fetch camera calibration",
-            )
-        )
-        processed_calibration = vision.build_processed_calibration(
-            reference, width=processed.width, height=processed.height
-        )
         response = {
             "image_id": image_id,
             "content_type": "image/jpeg",
@@ -423,8 +412,6 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 "created_at": image.get("created_at"),
             },
         }
-        if processed_calibration is not None:
-            response["processed_calibration"] = processed_calibration
         return response
 
     async def apply_vision_radius(call: ServiceCall) -> dict:
