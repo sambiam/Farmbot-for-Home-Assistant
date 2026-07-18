@@ -291,9 +291,10 @@ def _async_register_services(hass: HomeAssistant) -> None:
         curves = await _safe_api_call(
             manager, manager.api.async_get_curves(), context="fetch curves"
         )
-        calibration = await _safe_api_call(
+        raw_calibration = await _safe_api_call(
             manager, manager.api.async_get_camera_calibration(), context="fetch camera calibration"
         )
+        calibration = vision.normalize_camera_calibration(raw_calibration)
 
         now = dt_util.utcnow()
         recent_images = vision.filter_recent_processed_images(
@@ -362,18 +363,48 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 translation_domain=DOMAIN, translation_key="vision_image_decode_failed"
             ) from err
 
+        # Rescale FarmBot's native camera calibration onto the exact image we
+        # are returning, so the companion app never has to guess which
+        # coordinate system the calibration belongs to. Unavailable/ambiguous
+        # calibration yields {"available": False, ...} rather than a guess.
+        raw_calibration = await _safe_api_call(
+            manager,
+            manager.api.async_get_camera_calibration(),
+            context="fetch camera calibration",
+        )
+        normalized_calibration = vision.normalize_camera_calibration(raw_calibration)
+        processed_calibration = vision.compute_processed_calibration(
+            normalized_calibration,
+            oriented_width=processed.oriented_width,
+            oriented_height=processed.oriented_height,
+            processed_width=processed.width,
+            processed_height=processed.height,
+        )
+
         meta = image.get("meta") or {}
         _LOGGER.debug(
-            "FarmBot Vision image %s processed to %dx%d (%d bytes JPEG; base64 not logged)",
-            image_id, processed.width, processed.height, len(processed.jpeg_bytes),
+            "FarmBot Vision image %s processed %dx%d -> %dx%d "
+            "(%d bytes JPEG; base64 and signed URL not logged)",
+            image_id, processed.oriented_width, processed.oriented_height,
+            processed.width, processed.height, len(processed.jpeg_bytes),
         )
         return {
             "image_id": image_id,
             "content_type": "image/jpeg",
+            # sha256 is over the returned JPEG bytes; source_sha256 is over the
+            # original download and never replaces it.
             "sha256": processed.sha256,
+            "source_sha256": processed.source_sha256,
+            "source_width": processed.source_width,
+            "source_height": processed.source_height,
+            "oriented_width": processed.oriented_width,
+            "oriented_height": processed.oriented_height,
             "width": processed.width,
             "height": processed.height,
+            "resize_scale_x": processed.resize_scale_x,
+            "resize_scale_y": processed.resize_scale_y,
             "image_base64": base64.b64encode(processed.jpeg_bytes).decode("ascii"),
+            "processed_calibration": processed_calibration,
             "meta": {
                 "x": meta.get("x"),
                 "y": meta.get("y"),

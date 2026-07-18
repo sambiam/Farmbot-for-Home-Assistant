@@ -34,7 +34,21 @@ Home Assistant installs these automatically from `manifest.json`; no manual
 
 - `requests==2.34.2`
 - `paho-mqtt==2.1.0`
-- `Pillow==12.3.0`
+
+**Pillow is intentionally not a manifest requirement.** Home Assistant Core
+already provides Pillow and pins it in its own `package_constraints.txt`
+(`Pillow==12.2.0` on Core 2026.7.x). If a custom integration *also* declares
+a Pillow pin, Core resolves the manifest requirements against that constraint
+file; a mismatched pin (the earlier `Pillow==12.3.0`) is unsatisfiable and
+setup fails with:
+
+```
+Setup failed for custom integration 'farmbot': Requirements for farmbot not found: ['Pillow==12.3.0'].
+```
+
+The integration therefore imports `PIL` from the Core-provided Pillow and
+declares no Pillow requirement of its own. See the CHANGELOG for the full
+root-cause write-up and migration notes.
 
 ## Configuration
 
@@ -107,6 +121,109 @@ Consequences of that:
   the config entry the call was made against; a plant belonging to a
   different bot is always rejected.
 
+### `get_vision_image` response contract
+
+`farmbot.get_vision_image` downloads one FarmBot image, corrects its EXIF
+orientation, downsamples it (Lanczos, aspect-ratio preserved, never upscaled)
+to fit inside the requested `max_width` x `max_height`, re-encodes it as JPEG,
+and returns:
+
+| Field | Meaning |
+| --- | --- |
+| `image_id` | FarmBot image ID requested |
+| `content_type` | Always `image/jpeg` |
+| `sha256` | SHA-256 of the **returned** JPEG bytes (decode `image_base64` and this hash must match) |
+| `source_sha256` | *(optional)* SHA-256 of the original downloaded image bytes; never replaces `sha256` |
+| `source_width` / `source_height` | Dimensions immediately after decode, **before** EXIF orientation |
+| `oriented_width` / `oriented_height` | Dimensions **after** EXIF orientation, before resize (the calibration coordinate system) |
+| `width` / `height` | Dimensions of the returned JPEG |
+| `resize_scale_x` | `width / oriented_width` |
+| `resize_scale_y` | `height / oriented_height` |
+| `image_base64` | Base64 of the returned JPEG |
+| `processed_calibration` | Camera calibration rescaled to the returned image, or `{"available": false, "basis": "processed_image"}` |
+| `meta` | `{x, y, z, created_at}` from the FarmBot image record |
+
+The default bounding box is 640 x 480; the app may request larger analysis
+resolutions such as 960 x 720 or 1280 x 960 (each side is capped at a hard
+maximum of 4096, so a native 2592 x 1944 frame is never returned unless a
+future, explicitly bounded request asks for it). Only one image is decoded
+per call, and all Pillow work runs in the executor.
+
+Example response for a 2592 x 1944 source requested at `max_width: 960`,
+`max_height: 720`:
+
+```json
+{
+  "image_id": 456,
+  "content_type": "image/jpeg",
+  "sha256": "hash-of-returned-jpeg",
+  "source_sha256": "hash-of-original-download",
+  "source_width": 2592,
+  "source_height": 1944,
+  "oriented_width": 2592,
+  "oriented_height": 1944,
+  "width": 960,
+  "height": 720,
+  "resize_scale_x": 0.37037037,
+  "resize_scale_y": 0.37037037,
+  "image_base64": "base64-of-the-960x720-jpeg",
+  "processed_calibration": {
+    "available": true,
+    "pixels_per_mm_x": 0.455,
+    "pixels_per_mm_y": 0.455,
+    "rotation_degrees": 0,
+    "offset_x_mm": 0,
+    "offset_y_mm": 0,
+    "basis": "processed_image",
+    "width": 960,
+    "height": 720
+  },
+  "meta": { "x": 500.0, "y": 300.0, "z": 0.0, "created_at": "ISO-8601" }
+}
+```
+
+### Camera calibration normalization
+
+`farmbot.get_vision_inventory` returns `camera_calibration` in a normalized
+form the companion app can consume directly, instead of FarmBot's raw
+`CAMERA_CALIBRATION_*` Farmware env values. The raw field meanings were
+verified against FarmBot's own plant-detection Farmware
+([`plant_detection/P2C.py`](https://github.com/FarmBot-Labs/plant-detection)):
+
+- `coord_scale` is **millimetres per pixel**, so `pixels_per_mm = 1 / coord_scale`
+  (FarmBot uses a single isotropic scale, so x and y are equal).
+- `center_pixel_location_x` / `_y` are the image-centre pixel coordinates in
+  the native, EXIF-oriented capture, computed by FarmBot as `int(dimension / 2)`.
+  The native reference dimensions are therefore `center_pixel_location * 2`.
+- `total_rotation_angle` is in **degrees**, passed through unchanged (sign
+  follows FarmBot's stored whole-image-rotation convention).
+- `camera_offset_x` / `_y` are **millimetre** offsets from the bot (UTM)
+  position to the camera centre, in FarmBot coordinates.
+
+Normalized structure (`basis: "oriented_native_image"`):
+
+```json
+{
+  "available": true,
+  "pixels_per_mm_x": 1.23,
+  "pixels_per_mm_y": 1.23,
+  "rotation_degrees": 0.0,
+  "offset_x_mm": 0.0,
+  "offset_y_mm": 0.0,
+  "reference_width": 2592,
+  "reference_height": 1944,
+  "basis": "oriented_native_image"
+}
+```
+
+When any required value is missing, non-finite, or the native reference
+dimensions cannot be derived, `camera_calibration` and `processed_calibration`
+report `{"available": false}` rather than guessing — this preserves the
+companion app's own manual-calibration fallback. `processed_calibration` is
+only marked available when the returned image's *oriented* native dimensions
+match the calibration's reference dimensions, so the app never has to guess
+which coordinate system a calibration belongs to.
+
 ### Data update behaviour
 
 - **Vision status entities** (`FarmBot Vision Status`, `Last Analysis`,
@@ -145,9 +262,18 @@ Consequences of that:
 
 ### Minimum FarmBot Vision app version
 
-This bridge's service/event contract is documented as version `1.1.0` of
-this integration. A companion FarmBot Vision app targeting this bridge
-should declare a minimum required integration version of **1.1.0**.
+This bridge's service/event contract is documented as version `1.2.0` of
+this integration. The `1.2.0` `get_vision_image` response adds
+`source_sha256`, `source_width`/`source_height`, `oriented_width`/
+`oriented_height`, `resize_scale_x`/`resize_scale_y`, and
+`processed_calibration` as **optional, additive** fields; the `1.1.0` fields
+(`image_id`, `content_type`, `sha256`, `width`, `height`, `image_base64`,
+`meta`) are unchanged, so a `1.1.0`-era app keeps working. The one behavioural
+change is that `sha256` now hashes the returned JPEG (as it always should
+have) rather than the original download; an app that verified `sha256`
+against the base64 payload now succeeds where it previously would have
+mismatched. A companion app that consumes the new fields should declare a
+minimum required integration version of **1.2.0**.
 
 ## License
 
