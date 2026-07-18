@@ -108,6 +108,82 @@ def filter_recent_processed_images(
     return result
 
 
+# -------------------- calibration --------------------
+
+# Contract version emitted to the FarmBot Vision app.
+VISION_CONTRACT_VERSION = "farmbot-vision-v2"
+
+
+def map_camera_calibration(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Map FarmBot farmware calibration values to the app's reference shape.
+
+    FarmBot stores ``coord_scale`` as millimetres-per-pixel at the native
+    camera resolution. The app expects ``pixels_per_mm`` at a stated reference
+    resolution, so we invert the scale and derive the reference dimensions from
+    ``center_pixel_location_*`` (half-frame). Any missing or non-positive core
+    value yields ``{"available": False}`` rather than a guessed calibration.
+    """
+    if not isinstance(raw, dict) or not raw.get("available"):
+        return {"available": False}
+    coord_scale = raw.get("coord_scale")
+    cx = raw.get("center_pixel_location_x")
+    cy = raw.get("center_pixel_location_y")
+    if not (
+        _is_finite_positive_number(coord_scale)
+        and _is_finite_positive_number(cx)
+        and _is_finite_positive_number(cy)
+    ):
+        return {"available": False}
+    pixels_per_mm = 1.0 / coord_scale
+    return {
+        "available": True,
+        "pixels_per_mm_x": pixels_per_mm,
+        "pixels_per_mm_y": pixels_per_mm,
+        "rotation_degrees": float(raw.get("total_rotation_angle") or 0.0),
+        "offset_x_mm": float(raw.get("camera_offset_x") or 0.0),
+        "offset_y_mm": float(raw.get("camera_offset_y") or 0.0),
+        "reference_width": int(round(cx * 2)),
+        "reference_height": int(round(cy * 2)),
+        "basis": "native_frame",
+    }
+
+
+def build_processed_calibration(
+    reference: dict[str, Any] | None, *, width: int, height: int
+) -> dict[str, Any] | None:
+    """Scale a reference calibration to an exact processed image.
+
+    Returns a ``processed_image`` basis calibration the app can use directly,
+    or ``None`` when the reference is unavailable/incomplete. This is the same
+    documented transform the app would otherwise apply; doing it here lets the
+    app prefer a calibration already tied to the returned pixels.
+    """
+    if not isinstance(reference, dict) or not reference.get("available"):
+        return None
+    ref_w = reference.get("reference_width")
+    ref_h = reference.get("reference_height")
+    ppm_x = reference.get("pixels_per_mm_x")
+    ppm_y = reference.get("pixels_per_mm_y")
+    if not (
+        _is_finite_positive_number(ref_w)
+        and _is_finite_positive_number(ref_h)
+        and _is_finite_positive_number(ppm_x)
+        and _is_finite_positive_number(ppm_y)
+    ):
+        return None
+    return {
+        "available": True,
+        "pixels_per_mm_x": ppm_x * width / ref_w,
+        "pixels_per_mm_y": ppm_y * height / ref_h,
+        "rotation_degrees": float(reference.get("rotation_degrees") or 0.0),
+        "offset_x_mm": float(reference.get("offset_x_mm") or 0.0),
+        "offset_y_mm": float(reference.get("offset_y_mm") or 0.0),
+        "basis": "processed_image",
+        "width": width,
+        "height": height,
+    }
+
+
 # -------------------- curves --------------------
 
 def is_vision_owned_curve(curve: dict[str, Any]) -> bool:

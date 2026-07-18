@@ -310,3 +310,49 @@ def test_validate_plant_assignment_rejects_wrong_bot():
 def test_validate_plant_assignment_accepts_matching_plant():
     result = vision.validate_plant_assignment(_point(), device_id="42")
     assert result.ok
+
+
+# --------------------------- calibration mapping (contract v2) ---------------------------
+
+_RAW_CALIBRATION = {
+    "available": True,
+    "coord_scale": 2.0,  # mm per pixel at native resolution
+    "center_pixel_location_x": 1296,  # -> reference width 2592
+    "center_pixel_location_y": 972,  # -> reference height 1944
+    "total_rotation_angle": 3.0,
+    "camera_offset_x": 5.0,
+    "camera_offset_y": -4.0,
+}
+
+
+def test_map_camera_calibration_inverts_scale_and_derives_reference():
+    mapped = vision.map_camera_calibration(_RAW_CALIBRATION)
+    assert mapped["available"] is True
+    assert mapped["pixels_per_mm_x"] == 0.5  # 1 / coord_scale
+    assert mapped["pixels_per_mm_y"] == 0.5
+    assert mapped["reference_width"] == 2592
+    assert mapped["reference_height"] == 1944
+    assert mapped["rotation_degrees"] == 3.0
+    assert mapped["basis"] == "native_frame"
+
+
+def test_map_camera_calibration_unavailable_when_missing_core_values():
+    assert vision.map_camera_calibration({"available": True})["available"] is False
+    assert vision.map_camera_calibration({"available": False})["available"] is False
+    assert vision.map_camera_calibration(None)["available"] is False
+    bad = dict(_RAW_CALIBRATION, coord_scale=0)
+    assert vision.map_camera_calibration(bad)["available"] is False
+
+
+def test_build_processed_calibration_scales_to_processed_pixels():
+    reference = vision.map_camera_calibration(_RAW_CALIBRATION)
+    processed = vision.build_processed_calibration(reference, width=960, height=720)
+    assert processed["basis"] == "processed_image"
+    assert processed["width"] == 960 and processed["height"] == 720
+    # 0.5 px/mm * 960 / 2592
+    assert abs(processed["pixels_per_mm_x"] - 0.5 * 960 / 2592) < 1e-9
+
+
+def test_build_processed_calibration_none_when_reference_unavailable():
+    assert vision.build_processed_calibration({"available": False}, width=960, height=720) is None
+    assert vision.build_processed_calibration(None, width=960, height=720) is None
