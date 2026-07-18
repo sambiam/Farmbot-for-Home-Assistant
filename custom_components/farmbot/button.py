@@ -3,8 +3,9 @@
 import logging
 
 from homeassistant.components.button import ButtonEntity
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
-from .const import EVENT_VISION_REQUEST
+from .const import EVENT_VISION_REQUEST, SIGNAL_SEQUENCE_SELECTED
 from .entity import FarmbotEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -16,9 +17,13 @@ WATER_PLANTS_SEQUENCE_ID = 252674
 async def async_setup_entry(hass, entry, async_add_entities):
     manager = hass.data["farmbot"][entry.entry_id]
 
-    # The FarmBot Vision button does not depend on FarmBot sequences, so it
-    # is always added even if fetching sequences below fails.
-    buttons = [FarmbotAnalysePlantRadiiButton(manager)]
+    # The FarmBot Vision button and the "launch selected sequence" button do
+    # not depend on FarmBot sequences being fetched, so they are always
+    # added even if fetching sequences below fails.
+    buttons = [
+        FarmbotAnalysePlantRadiiButton(manager),
+        FarmbotLaunchSelectedSequenceButton(manager),
+    ]
 
     # Fetch available sequences to determine which sequence-specific buttons to add
     try:
@@ -90,6 +95,57 @@ class WaterPlantsButton(FarmbotEntity, ButtonEntity):
             "body": []
         }]
         self._manager.send_rpc_request(body, priority=600)
+
+
+class FarmbotLaunchSelectedSequenceButton(FarmbotEntity, ButtonEntity):
+    """Repeatedly (re-)launches whichever sequence is picked in FarmBot Sequence.
+
+    The select entity triggers a run the moment its option changes, but
+    selecting the same option twice in a row does not fire a state change
+    in Home Assistant, so it cannot be used to run a sequence again. This
+    button reads the manager's currently selected sequence and executes it
+    on every press, regardless of whether the selection changed.
+    """
+
+    def __init__(self, manager):
+        super().__init__(manager)
+        self._selected = manager.selected_sequence
+
+    @property
+    def unique_id(self):
+        return f"{self._manager.device_id}_launch_selected_sequence"
+
+    @property
+    def name(self):
+        return "FarmBot Launch Selected Sequence"
+
+    @property
+    def available(self):
+        return self._selected is not None
+
+    @property
+    def extra_state_attributes(self):
+        if not self._selected:
+            return {}
+        return {
+            "sequence_id": self._selected["id"],
+            "sequence_name": self._selected["name"],
+        }
+
+    async def async_added_to_hass(self):
+        async_dispatcher_connect(self.hass, SIGNAL_SEQUENCE_SELECTED, self._update_selected)
+
+    def _update_selected(self, seq):
+        self._selected = seq
+        self.async_write_ha_state()
+
+    async def async_press(self):
+        seq = self._selected
+        if not seq:
+            _LOGGER.warning("Launch Selected Sequence pressed but no sequence is selected")
+            return
+        _LOGGER.debug("Launching selected sequence %s (%s)", seq["id"], seq["name"])
+        self._manager.execute_sequence(seq["id"])
 
 
 class FarmbotAnalysePlantRadiiButton(FarmbotEntity, ButtonEntity):

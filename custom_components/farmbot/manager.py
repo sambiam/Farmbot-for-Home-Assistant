@@ -28,6 +28,7 @@ from .const import (
     OPTION_MINIMUM_AUTOMATIC_CONFIDENCE,
     OPTION_VISION_ENABLED,
     OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+    SIGNAL_SEQUENCE_SELECTED,
     SIGNAL_STATE,
     SIGNAL_VISION_STATE,
     TOKEN_REFRESH_WINDOW,
@@ -84,6 +85,7 @@ class FarmbotManager:
         self._entry = entry  # ConfigEntry reference for updates and reauth
         self._auth_failed = False  # Track auth failure to prevent spam
         self._last_bad_auth_log_time = 0  # Rate-limit bad-auth logging
+        self.selected_sequence: Optional[dict] = None  # {'id': int, 'name': str} or None
         # Do not connect here; async_setup_entry will await connect_mqtt()
 
         # -------------------- FarmBot Vision bridge runtime state --------------------
@@ -374,6 +376,16 @@ class FarmbotManager:
     def execute_sequence(self, sequence_id: int):
         cs = [{"kind": "execute", "args": {"sequence_id": int(sequence_id)}}]
         self.send_rpc_request(cs)
+
+    def set_selected_sequence(self, seq: Optional[dict]) -> None:
+        """Record which sequence is currently selected and notify listeners.
+
+        Lets the "launch selected sequence" button stay in sync with the
+        sequence select entity without the two entities referencing each
+        other directly.
+        """
+        self.selected_sequence = seq
+        async_dispatcher_send(self.hass, SIGNAL_SEQUENCE_SELECTED, seq)
 
     def move_to(self, x=None, y=None, z=None, speed=100):
         args = {}

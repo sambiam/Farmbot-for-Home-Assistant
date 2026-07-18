@@ -12,6 +12,7 @@ TOPIC_LOGS    = "bot/{device_id}/logs"
 # Dispatcher signals
 SIGNAL_STATE = "farmbot_state_update"
 SIGNAL_VISION_STATE = "farmbot_vision_state_update"
+SIGNAL_SEQUENCE_SELECTED = "farmbot_sequence_selected"
 
 # Token refresh settings
 TOKEN_REFRESH_WINDOW = 7 * 24 * 60 * 60  # 7 days in seconds
