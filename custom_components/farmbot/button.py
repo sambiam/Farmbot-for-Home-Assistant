@@ -137,7 +137,11 @@ class FarmbotLaunchSelectedSequenceButton(FarmbotEntity, ButtonEntity):
 
     def _update_selected(self, seq):
         self._selected = seq
-        self.async_write_ha_state()
+        # This callback can be invoked from a thread other than the event
+        # loop, so use the thread-safe state update instead of
+        # async_write_ha_state (see
+        # https://developers.home-assistant.io/docs/asyncio_thread_safety/#async_write_ha_state).
+        self.schedule_update_ha_state()
 
     async def async_press(self):
         seq = self._selected
