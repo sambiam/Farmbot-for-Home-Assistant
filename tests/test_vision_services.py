@@ -186,6 +186,35 @@ def test_get_vision_inventory_include_all_curves():
     assert [c["id"] for c in result["curves"]] == [1]
 
 
+def test_get_vision_inventory_normalizes_camera_calibration():
+    hass = FakeHass()
+    manager, _entry = _make_bot(hass)
+    manager.api = FakeVisionApi(
+        calibration={
+            "available": True,
+            "coord_scale": 0.8130081,
+            "center_pixel_location_x": 1296,
+            "center_pixel_location_y": 972,
+            "camera_z": 300.0,
+            "total_rotation_angle": 0.0,
+            "camera_offset_x": 0.0,
+            "camera_offset_y": 0.0,
+        }
+    )
+    _async_register_services(hass)
+
+    result = _run(_call(hass, SERVICE_GET_VISION_INVENTORY, {"config_entry_id": "entry-1"}))
+    cal = result["camera_calibration"]
+    assert cal["available"] is True
+    assert cal["basis"] == "oriented_native_image"
+    assert cal["reference_width"] == 2592
+    assert cal["reference_height"] == 1944
+    assert cal["pixels_per_mm_x"] == pytest.approx(1.23, abs=1e-3)
+    # Raw FarmBot field names must NOT leak through (the app would misread them).
+    assert "coord_scale" not in cal
+    assert "center_pixel_location_x" not in cal
+
+
 # --------------------------- get_vision_image ---------------------------
 
 def _image_record(image_id, **overrides):
@@ -225,6 +254,8 @@ def test_get_vision_image_rejects_missing_image():
 
 
 def test_get_vision_image_returns_resized_base64_jpeg_without_leaking_secrets(caplog):
+    import hashlib
+
     hass = FakeHass()
     manager, _ = _make_bot(hass)
     manager.api.images[5] = _image_record(5)
@@ -243,10 +274,82 @@ def test_get_vision_image_returns_resized_base64_jpeg_without_leaking_secrets(ca
     assert decoded[:2] == b"\xff\xd8"  # JPEG magic bytes
     assert result["meta"] == {"x": 1, "y": 2, "z": 3, "created_at": "2026-07-17T00:00:00Z"}
 
+    # Backward-compatible fields still present.
+    for field in ("image_id", "content_type", "sha256", "width", "height", "image_base64", "meta"):
+        assert field in result
+
+    # New scaling metadata present and correct.
+    assert result["source_width"] == 1200
+    assert result["source_height"] == 800
+    assert result["oriented_width"] == 1200
+    assert result["oriented_height"] == 800
+    assert result["resize_scale_x"] == pytest.approx(result["width"] / 1200)
+    assert result["resize_scale_y"] == pytest.approx(result["height"] / 800)
+
+    # Checksum contract: sha256 is over the returned JPEG bytes, not the source.
+    assert result["sha256"] == hashlib.sha256(decoded).hexdigest()
+    assert result["source_sha256"] == hashlib.sha256(manager.api.download_bytes).hexdigest()
+    assert result["sha256"] != result["source_sha256"]
+
+    # No calibration configured on the fake -> processed calibration unavailable.
+    assert result["processed_calibration"] == {
+        "available": False, "basis": "processed_image"
+    }
+
     for record in caplog.records:
         message = record.getMessage()
         assert result["image_base64"] not in message
         assert manager.token not in message
+        assert "img.jpg" not in message  # signed/attachment URL path never logged
+
+
+def test_get_vision_image_includes_processed_calibration_when_available():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    manager.api.images[5] = _image_record(5)
+    manager.api.download_bytes = _make_jpeg_bytes(size=(2592, 1944))
+    manager.api.calibration = {
+        "available": True,
+        "coord_scale": 0.8130081,          # -> ~1.23 px/mm
+        "center_pixel_location_x": 1296,   # -> reference_width 2592
+        "center_pixel_location_y": 972,    # -> reference_height 1944
+        "camera_z": 300.0,
+        "total_rotation_angle": 0.0,
+        "camera_offset_x": 0.0,
+        "camera_offset_y": 0.0,
+    }
+    _async_register_services(hass)
+
+    result = _run(_call(
+        hass, SERVICE_GET_VISION_IMAGE,
+        {"config_entry_id": "entry-1", "image_id": 5, "max_width": 960, "max_height": 720},
+    ))
+
+    assert result["width"] == 960
+    assert result["height"] == 720
+    cal = result["processed_calibration"]
+    assert cal["available"] is True
+    assert cal["basis"] == "processed_image"
+    assert cal["width"] == 960
+    assert cal["height"] == 720
+    assert cal["pixels_per_mm_x"] == pytest.approx(0.455, abs=1e-3)
+    assert cal["pixels_per_mm_y"] == pytest.approx(0.455, abs=1e-3)
+
+
+@pytest.mark.parametrize("box", [(640, 480), (960, 720), (1280, 960)])
+def test_get_vision_image_supports_configurable_analysis_resolutions(box):
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    manager.api.images[5] = _image_record(5)
+    manager.api.download_bytes = _make_jpeg_bytes(size=(2592, 1944))
+    _async_register_services(hass)
+
+    result = _run(_call(
+        hass, SERVICE_GET_VISION_IMAGE,
+        {"config_entry_id": "entry-1", "image_id": 5,
+         "max_width": box[0], "max_height": box[1]},
+    ))
+    assert (result["width"], result["height"]) == box
 
 
 def test_get_vision_image_rejects_decode_failure():
