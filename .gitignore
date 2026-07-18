@@ -25,3 +25,4 @@ env/
 
 # GitHub metadata
 *.orig
+*.egg-info/

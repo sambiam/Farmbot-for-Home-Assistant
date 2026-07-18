@@ -3,6 +3,31 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.2.0 - Contract farmbot-vision-v2 (high-resolution image contract)
+
+### Added
+
+- `farmbot.get_vision_image` now returns the contract v2 fields: `source_width`/
+  `source_height` (before EXIF orientation), `oriented_width`/`oriented_height`
+  (after), `resize_scale_x`/`resize_scale_y`, an optional `source_sha256` over
+  the original download, and an optional `processed_calibration` (basis
+  `processed_image`) scaled to the exact returned pixels.
+- `farmbot.get_vision_inventory` now maps FarmBot's farmware camera calibration
+  into the app's reference shape: `pixels_per_mm_x/y` (from `coord_scale`),
+  `rotation_degrees`, offsets, and `reference_width`/`reference_height`/`basis`
+  derived from the calibration's centre-pixel location. Missing or non-positive
+  core values report `available: false` rather than a guessed calibration.
+- `image_utils.process_image` records source/oriented dimensions and resize
+  scales alongside the JPEG.
+- Raised the default image request size to 960×720 (max 1280×960 unchanged).
+- Minimum compatible FarmBot Vision app version raised to 0.2.0.
+
+### Changed
+
+- `sha256` in the image response is now computed over the **returned** JPEG
+  bytes (so the app can verify what it receives); the original download hash is
+  exposed separately as `source_sha256`.
+
 ## 1.1.0 - FarmBot Vision bridge
 
 ### Added

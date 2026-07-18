@@ -291,9 +291,10 @@ def _async_register_services(hass: HomeAssistant) -> None:
         curves = await _safe_api_call(
             manager, manager.api.async_get_curves(), context="fetch curves"
         )
-        calibration = await _safe_api_call(
+        raw_calibration = await _safe_api_call(
             manager, manager.api.async_get_camera_calibration(), context="fetch camera calibration"
         )
+        calibration = vision.map_camera_calibration(raw_calibration)
 
         now = dt_util.utcnow()
         recent_images = vision.filter_recent_processed_images(
@@ -367,12 +368,30 @@ def _async_register_services(hass: HomeAssistant) -> None:
             "FarmBot Vision image %s processed to %dx%d (%d bytes JPEG; base64 not logged)",
             image_id, processed.width, processed.height, len(processed.jpeg_bytes),
         )
-        return {
+        # Best-effort processed-image calibration tied to these exact pixels.
+        reference = vision.map_camera_calibration(
+            await _safe_api_call(
+                manager,
+                manager.api.async_get_camera_calibration(),
+                context="fetch camera calibration",
+            )
+        )
+        processed_calibration = vision.build_processed_calibration(
+            reference, width=processed.width, height=processed.height
+        )
+        response = {
             "image_id": image_id,
             "content_type": "image/jpeg",
             "sha256": processed.sha256,
+            "source_sha256": processed.source_sha256,
+            "source_width": processed.source_width,
+            "source_height": processed.source_height,
+            "oriented_width": processed.oriented_width,
+            "oriented_height": processed.oriented_height,
             "width": processed.width,
             "height": processed.height,
+            "resize_scale_x": processed.resize_scale_x,
+            "resize_scale_y": processed.resize_scale_y,
             "image_base64": base64.b64encode(processed.jpeg_bytes).decode("ascii"),
             "meta": {
                 "x": meta.get("x"),
@@ -381,6 +400,9 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 "created_at": image.get("created_at"),
             },
         }
+        if processed_calibration is not None:
+            response["processed_calibration"] = processed_calibration
+        return response
 
     async def apply_vision_radius(call: ServiceCall) -> dict:
         manager = _get_manager(hass, call.data["config_entry_id"])

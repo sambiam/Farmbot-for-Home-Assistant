@@ -22,7 +22,7 @@ TOKEN_REFRESH_INTERVAL = 6 * 60 * 60  # Check every 6 hours
 # FarmBot Vision bridge
 # --------------------------------------------------------------------------
 
-MIN_VISION_APP_VERSION = "0.1.0"
+MIN_VISION_APP_VERSION = "0.2.0"
 
 # Service names (existing)
 SERVICE_EXECUTE_SEQUENCE = "execute_sequence"
