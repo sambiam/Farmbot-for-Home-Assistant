@@ -61,6 +61,7 @@ class FarmbotSequenceSelect(FarmbotEntity, SelectEntity):
             _LOGGER.error("Selected sequence ID %s not found", seq_id)
             return
         self._selected = seq
+        self._manager.set_selected_sequence(seq)
         body = [{"kind": "execute", "args": {"sequence_id": seq_id}, "body": []}]
         self._manager.send_rpc_request(body)
         self.async_write_ha_state()
