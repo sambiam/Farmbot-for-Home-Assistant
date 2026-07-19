@@ -1,7 +1,22 @@
 """Minimal stand-in for homeassistant.helpers.config_validation."""
 import voluptuous as vol
 
-string = str
+def string(value):
+    """Stand-in for cv.string that mirrors real HA's None/list/dict rejection.
+
+    Real Home Assistant's ``cv.string`` raises ``vol.Invalid`` for ``None``
+    and for list/dict values, coercing everything else with ``str()``. A naive
+    ``string = str`` alias would silently accept ``None`` (as the literal
+    ``"None"``), hiding schema bugs where a nullable field is declared with a
+    bare ``cv.string`` -- exactly the failure mode this stub must reproduce.
+    """
+    if value is None:
+        raise vol.Invalid("string value is None")
+    if isinstance(value, (list, dict)):
+        raise vol.Invalid("value should be a string")
+    return str(value)
+
+
 positive_int = vol.All(vol.Coerce(int), vol.Range(min=0))
 
 

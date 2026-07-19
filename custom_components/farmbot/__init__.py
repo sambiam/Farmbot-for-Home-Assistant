@@ -164,14 +164,20 @@ SERVICE_REPORT_VISION_STATUS_SCHEMA = vol.Schema(
         vol.Required("config_entry_id"): cv.string,
         vol.Required("available"): cv.boolean,
         vol.Required("status"): vol.In(VISION_STATUS_VALUES),
-        vol.Optional("job_id"): cv.string,
-        vol.Optional("last_completed_at"): cv.string,
+        # job_id and last_completed_at are nullable per the farmbot-vision-v2
+        # contract: the companion app sends job_id=null on every idle
+        # heartbeat and last_completed_at=null while a job is running. cv.string
+        # rejects None, so accepting a bare string here would 400 every real
+        # report (including the very first one) and leave the Vision entities
+        # stuck at their defaults forever. Accept None explicitly.
+        vol.Optional("job_id"): vol.Any(None, cv.string),
+        vol.Optional("last_completed_at"): vol.Any(None, cv.string),
         vol.Optional("plants_analysed"): vol.All(vol.Coerce(int), vol.Range(min=0)),
         vol.Optional("recommendations"): vol.All(vol.Coerce(int), vol.Range(min=0)),
         vol.Optional("automatically_applied"): vol.All(vol.Coerce(int), vol.Range(min=0)),
         vol.Optional("uncertain"): vol.All(vol.Coerce(int), vol.Range(min=0)),
-        vol.Optional("message"): cv.string,
-        vol.Optional("app_version"): cv.string,
+        vol.Optional("message"): vol.All(cv.string, vol.Length(max=240)),
+        vol.Optional("app_version"): vol.Any(None, cv.string),
     }
 )
 

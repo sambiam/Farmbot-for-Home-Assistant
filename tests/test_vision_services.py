@@ -12,9 +12,11 @@ import uuid
 from datetime import timedelta
 
 import pytest
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import ServiceCall
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.util import dt as dt_util
 
 from custom_components.farmbot import (
@@ -32,7 +34,7 @@ from custom_components.farmbot import (
     _async_remove_services_if_last_entry,
     _vision_response_service,
 )
-from custom_components.farmbot.const import EVENT_VISION_REQUEST
+from custom_components.farmbot.const import EVENT_VISION_REQUEST, SIGNAL_VISION_STATE
 from custom_components.farmbot.manager import FarmbotManager
 
 from .fake_api import FakeVisionApi
@@ -674,6 +676,124 @@ def test_report_vision_status_updates_manager_entities_state():
     assert manager.vision_job_id == "job-9"
     assert manager.vision_plants_analysed == 3
     assert manager.vision_is_available() is True
+
+
+def _read_vision_entity_state(manager):
+    """Snapshot the values the Vision entities expose to Home Assistant.
+
+    Mirrors the native_value / is_on logic of FarmbotVisionAvailableBinarySensor
+    and the FarmbotVision* sensors so the assertions track exactly what a user
+    would see, without needing the entity platform stubs (which don't exist in
+    this isolated test environment).
+    """
+    return {
+        "available": manager.vision_is_available(),
+        "status": "unavailable" if not manager.vision_is_available() else manager.vision_status,
+        "last_completed_at": manager.vision_last_completed_at,
+        "recommendations": manager.vision_recommendations,
+        "uncertain": manager.vision_uncertain,
+    }
+
+
+def test_report_vision_status_accepts_null_job_id_and_last_completed_at():
+    """The farmbot-vision-v2 contract sends job_id / last_completed_at as null.
+
+    The companion app reports job_id=null on every idle heartbeat and
+    last_completed_at=null while a job is running. A schema declaring these as a
+    bare cv.string rejects None with HTTP 400, so the report never reaches the
+    handler -- exactly the failure that leaves every Vision entity stuck at its
+    default. Both explicit-null payloads must validate and update the manager.
+    """
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    _async_register_services(hass)
+
+    # Idle heartbeat: job_id explicitly null, last_completed_at present.
+    _run(_call(hass, SERVICE_REPORT_VISION_STATUS, {
+        "config_entry_id": "entry-1", "available": True, "status": "idle",
+        "job_id": None, "last_completed_at": "2026-07-19T09:00:00+00:00",
+    }))
+    assert manager.vision_status == "idle"
+    assert manager.vision_job_id is None
+    assert manager.vision_last_completed_at == dt_util.parse_datetime(
+        "2026-07-19T09:00:00+00:00"
+    )
+
+    # Running: job_id present, last_completed_at explicitly null.
+    _run(_call(hass, SERVICE_REPORT_VISION_STATUS, {
+        "config_entry_id": "entry-1", "available": True, "status": "running",
+        "job_id": "job-42", "last_completed_at": None,
+    }))
+    assert manager.vision_status == "running"
+    assert manager.vision_job_id == "job-42"
+
+
+def test_report_vision_status_updates_entities_on_two_distinct_reports():
+    """Two different reports must each push a fresh state to the entities.
+
+    Guards against two regressions at once:
+
+    * a schema that rejects the nullable job_id / last_completed_at fields the
+      companion app really sends (would 400 the very first report), and
+    * an update de-duplication bug that compares the first payload against an
+      uninitialised baseline and suppresses the first-ever entity write.
+
+    Each Vision entity refreshes by subscribing to SIGNAL_VISION_STATE, so we
+    subscribe the same way and record the state the entities would render on
+    every dispatch, asserting both reports land.
+    """
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    _async_register_services(hass)
+
+    snapshots = []
+    async_dispatcher_connect(
+        hass, SIGNAL_VISION_STATE,
+        lambda: snapshots.append(_read_vision_entity_state(manager)),
+    )
+
+    # First-ever report: an idle heartbeat with a null job_id.
+    _run(_call(hass, SERVICE_REPORT_VISION_STATUS, {
+        "config_entry_id": "entry-1", "available": True, "status": "idle",
+        "job_id": None, "last_completed_at": "2026-07-19T09:00:00+00:00",
+        "recommendations": 0, "uncertain": 0,
+    }))
+
+    # Second, materially different report: a completed analysis.
+    _run(_call(hass, SERVICE_REPORT_VISION_STATUS, {
+        "config_entry_id": "entry-1", "available": True, "status": "idle",
+        "job_id": None, "last_completed_at": "2026-07-19T10:30:00+00:00",
+        "plants_analysed": 7, "recommendations": 3, "uncertain": 2,
+        "message": "Analysis complete",
+    }))
+
+    # Both reports must have notified the entities (dedup must not swallow the
+    # first-ever write, and a genuine change must dispatch again).
+    assert len(snapshots) == 2
+
+    first, second = snapshots
+    assert first["available"] is True
+    assert first["status"] == "idle"
+    assert first["last_completed_at"] == dt_util.parse_datetime("2026-07-19T09:00:00+00:00")
+    assert first["recommendations"] == 0
+    assert first["uncertain"] == 0
+
+    assert second["last_completed_at"] == dt_util.parse_datetime("2026-07-19T10:30:00+00:00")
+    assert second["recommendations"] == 3
+    assert second["uncertain"] == 2
+
+
+def test_report_vision_status_rejects_overlong_message():
+    """message is capped at 240 chars by the contract; longer input is invalid."""
+    hass = FakeHass()
+    _make_bot(hass)
+    _async_register_services(hass)
+
+    with pytest.raises(vol.Invalid):
+        _run(_call(hass, SERVICE_REPORT_VISION_STATUS, {
+            "config_entry_id": "entry-1", "available": True, "status": "idle",
+            "message": "x" * 241,
+        }))
 
 
 # --------------------------- request_vision_analysis ---------------------------
