@@ -7,6 +7,22 @@ All notable changes to this integration are documented here. Versions follow
 
 ### Fixed
 
+- **FarmBot Vision status entities never updated** (Vision Available stuck on
+  `Disconnected`, Vision Status on `Unavailable`, zero state history).
+  - **Root cause:** the `farmbot.report_vision_status` service schema declared
+    the nullable `job_id` and `last_completed_at` fields with a bare
+    `cv.string`. The `farmbot-vision-v2` companion app sends `job_id: null` on
+    every idle heartbeat and `last_completed_at: null` while a job is running,
+    but `cv.string` rejects `None`, so voluptuous raised and Home Assistant
+    returned HTTP 400 for **every** report — including the very first one. The
+    handler never ran, so no entity ever received an update. (The read path —
+    `list_vision_bots` / `get_vision_inventory` / `get_vision_image` — was
+    unaffected, which is why inventory and image loading worked.)
+  - **Fix:** `job_id`, `last_completed_at` and `app_version` now accept `None`
+    (`vol.Any(None, cv.string)`), and `message` is capped at the contract's 240
+    characters. A regression test drives `report_vision_status` twice with the
+    real null-bearing payloads and asserts the entities refresh on both calls.
+
 - **Integration setup failure** `Requirements for farmbot not found:
   ['Pillow==12.3.0']`.
   - **Root cause:** Home Assistant Core already provides Pillow and pins it in
