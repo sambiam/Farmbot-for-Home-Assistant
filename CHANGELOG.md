@@ -3,6 +3,25 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.3.2 - Ship the Vision status fix to stable
+
+### Fixed
+
+- **FarmBot Vision status entities still stuck for stable (non-beta) users.**
+  - **Root cause:** the `report_vision_status` schema fix (accepting the
+    nullable `job_id` / `last_completed_at` the companion app sends) landed in
+    the `1.3.1` build, but that build was only published as a *prerelease*.
+    HACS hides prereleases by default, so instances tracking stable releases
+    stayed on the older build whose schema rejects every status report with an
+    HTTP 400 — leaving Vision Available on `Disconnected`, Vision Status on
+    `Unavailable`, and no state history. Separately, `manifest.json` had never
+    been bumped past `1.2.0`, so the manifest version no longer tracked the
+    released tags.
+  - **Fix:** `manifest.json` version is bumped to `1.3.2` and this is published
+    as a stable (non-prerelease) release so HACS delivers the
+    `report_vision_status` fix to every user without requiring the beta channel.
+    No integration logic changed relative to `1.3.1`.
+
 ## 1.2.0 - Vision setup fix & high-resolution image handling
 
 ### Fixed
