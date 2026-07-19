@@ -218,6 +218,38 @@ async def _safe_api_call(manager: FarmbotManager, coro, *, context: str):
         ) from err
 
 
+def _vision_response_service(handler):
+    """Guard a response-returning Vision service so its failures stay structured.
+
+    Home Assistant maps an escaping ``HomeAssistantError`` (and its
+    ``ServiceValidationError`` subclass) to a JSON error carrying this
+    integration's translated message -- a 400 for a permanent validation
+    rejection, a 500 for a transient server error. Any *other* exception,
+    however, escapes the response path and is served as aiohttp's opaque
+    "Server got itself in trouble" 500 page, which a caller cannot tell apart
+    from a transient failure. Convert those stragglers into a translated
+    ``HomeAssistantError`` so every failure of a response service surfaces as a
+    structured status the FarmBot Vision app can act on, while validation
+    rejections keep flowing through untouched as their proper 400.
+    """
+    @functools.wraps(handler)
+    async def wrapper(call: ServiceCall):
+        try:
+            return await handler(call)
+        except HomeAssistantError:
+            raise
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.exception(
+                "Unexpected error in FarmBot Vision service %s", handler.__name__
+            )
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="vision_unexpected_error",
+            ) from err
+
+    return wrapper
+
+
 _RADIUS_REJECTION_MESSAGES = {
     "plant_not_found": "Plant not found",
     "wrong_device": "Plant does not belong to this FarmBot",
@@ -327,7 +359,13 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 translation_key="vision_image_not_found",
                 translation_placeholders={"image_id": str(image_id)},
             )
-        if str(image.get("device_id")) != str(manager.device_id):
+        # Resolve ownership from the same identity get_vision_inventory selects
+        # by: the FarmBot device behind this config entry. The image's REST
+        # ``device_id`` is a bare number while ``manager.device_id`` is the JWT
+        # ``device_<id>`` username form, so compare them via the shared,
+        # form-agnostic helper rather than as raw strings -- otherwise every
+        # legitimately-owned image is falsely rejected.
+        if not vision.same_device(image.get("device_id"), manager.device_id):
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key="vision_image_wrong_device"
             )
@@ -669,7 +707,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN,
         SERVICE_GET_VISION_IMAGE,
-        get_vision_image,
+        _vision_response_service(get_vision_image),
         schema=SERVICE_GET_VISION_IMAGE_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )

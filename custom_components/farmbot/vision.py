@@ -43,6 +43,36 @@ PLANT_FIELDS = (
 CURVE_FIELDS = ("id", "name", "type", "data")
 
 
+# -------------------- device identity --------------------
+
+def normalize_device_id(value: Any) -> str:
+    """Reduce a FarmBot device identifier to its canonical numeric form.
+
+    FarmBot exposes a device's identity in two interchangeable ways: the
+    REST API returns records carrying a bare numeric ``device_id`` (e.g.
+    ``3379``), while the JWT ``bot`` claim -- which the integration stores as
+    ``manager.device_id`` -- uses the ``device_<id>`` username form (e.g.
+    ``"device_3379"``). Comparing the two forms verbatim rejects every
+    legitimately-owned record, so ownership checks must first normalize both
+    sides to the same form.
+    """
+    text = str(value).strip()
+    if text.startswith("device_"):
+        text = text[len("device_"):]
+    return text
+
+
+def same_device(a: Any, b: Any) -> bool:
+    """True when two FarmBot device identifiers denote the same device.
+
+    Accepts either identifier in numeric (``3379``) or ``device_<id>``
+    (``"device_3379"``) form; see :func:`normalize_device_id`. This is the
+    single source of truth for "does this record belong to this FarmBot?",
+    shared by every ownership check so they can never disagree.
+    """
+    return normalize_device_id(a) == normalize_device_id(b)
+
+
 # -------------------- plants --------------------
 
 def is_active_plant(point: dict[str, Any]) -> bool:
@@ -450,7 +480,7 @@ def validate_radius_change(
     """
     if point is None:
         return ValidationResult(False, "plant_not_found")
-    if str(point.get("device_id")) != str(device_id):
+    if not same_device(point.get("device_id"), device_id):
         return ValidationResult(False, "wrong_device")
     if point.get("pointer_type") != POINTER_TYPE_PLANT:
         return ValidationResult(False, "not_a_plant")
@@ -545,7 +575,7 @@ def validate_plant_assignment(plant: dict[str, Any] | None, *, device_id: Any) -
     """Validate that a plant is eligible to be assigned a FarmBot Vision curve."""
     if plant is None:
         return ValidationResult(False, "plant_not_found")
-    if str(plant.get("device_id")) != str(device_id):
+    if not same_device(plant.get("device_id"), device_id):
         return ValidationResult(False, "wrong_device")
     if plant.get("pointer_type") != POINTER_TYPE_PLANT:
         return ValidationResult(False, "not_a_plant")

@@ -282,6 +282,9 @@
     "vision_image_decode_failed": {
       "message": "The downloaded image could not be decoded."
     },
+    "vision_unexpected_error": {
+      "message": "The FarmBot Vision request failed unexpectedly. See the Home Assistant log for details."
+    },
     "vision_curve_writes_disabled": {
       "message": "FarmBot Vision curve writes are disabled in the integration options."
     },
