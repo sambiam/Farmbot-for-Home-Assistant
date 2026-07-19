@@ -13,7 +13,8 @@ from datetime import timedelta
 
 import pytest
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.core import ServiceCall
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util import dt as dt_util
 
 from custom_components.farmbot import (
@@ -29,6 +30,7 @@ from custom_components.farmbot import (
     SERVICE_UPSERT_VISION_SPREAD_CURVE,
     _async_register_services,
     _async_remove_services_if_last_entry,
+    _vision_response_service,
 )
 from custom_components.farmbot.const import EVENT_VISION_REQUEST
 from custom_components.farmbot.manager import FarmbotManager
@@ -360,6 +362,111 @@ def test_get_vision_image_rejects_decode_failure():
     _async_register_services(hass)
     with pytest.raises(ServiceValidationError):
         _run(_call(hass, SERVICE_GET_VISION_IMAGE, {"config_entry_id": "entry-1", "image_id": 5}))
+
+
+# --------------- inventory <-> image ownership agreement (regression) ---------------
+
+def test_inventory_and_image_agree_on_ownership_round_trip():
+    """Every image get_vision_inventory lists MUST pass get_vision_image's
+    ownership check for the same config entry.
+
+    Reproduces the production identity mismatch: the FarmBot REST API returns
+    images with a bare numeric ``device_id`` (e.g. 42), while the config
+    entry's ``manager.device_id`` is the JWT ``device_<id>`` username form
+    (``"device_42"``). Before the fix the ownership check compared these two
+    forms verbatim and rejected every legitimately-owned image.
+    """
+    hass = FakeHass()
+    manager, _entry = _make_bot(hass, device_id="device_42")
+    now = dt_util.utcnow()
+    recent = (now - timedelta(hours=1)).isoformat()
+    manager.api = FakeVisionApi(
+        images=[
+            {
+                "id": image_id, "device_id": 42, "created_at": recent,
+                "attachment_processed_at": recent, "meta": {"x": 1, "y": 2, "z": 3},
+                "attachment_url": "https://x/img.jpg",
+            }
+            for image_id in (3043473, 3043472, 3043471, 3043164)
+        ],
+    )
+    manager.api.download_bytes = _make_jpeg_bytes(size=(200, 150))
+    _async_register_services(hass)
+
+    inventory = _run(_call(hass, SERVICE_GET_VISION_INVENTORY, {"config_entry_id": "entry-1"}))
+    listed_ids = [i["id"] for i in inventory["images"]]
+    assert listed_ids == [3043473, 3043472, 3043471, 3043164]
+
+    for image_id in listed_ids:
+        result = _run(_call(
+            hass, SERVICE_GET_VISION_IMAGE,
+            {"config_entry_id": "entry-1", "image_id": image_id},
+        ))
+        assert result["image_id"] == image_id
+        assert result["content_type"] == "image/jpeg"
+
+
+def test_get_vision_image_rejects_foreign_image_despite_prefixed_device_id():
+    """The fix must not loosen ownership: an image belonging to a different
+    FarmBot is still rejected, even when the owning bot uses the
+    ``device_<id>`` username form.
+    """
+    hass = FakeHass()
+    manager, _ = _make_bot(hass, device_id="device_42")
+    manager.api.images[5] = _image_record(5, device_id=99)
+    _async_register_services(hass)
+    with pytest.raises(ServiceValidationError) as excinfo:
+        _run(_call(hass, SERVICE_GET_VISION_IMAGE, {"config_entry_id": "entry-1", "image_id": 5}))
+    assert excinfo.value.translation_key == "vision_image_wrong_device"
+
+
+def test_get_vision_image_wrong_device_surfaces_as_translated_400_not_500():
+    """A foreign image is a permanent rejection: it must raise the
+    400-mapped ServiceValidationError carrying the translated message, never a
+    bare HomeAssistantError (which Home Assistant serves as a 500 the caller
+    would mistake for a transient failure).
+    """
+    hass = FakeHass()
+    manager, _ = _make_bot(hass, device_id="42")
+    manager.api.images[5] = _image_record(5, device_id="99")
+    _async_register_services(hass)
+    with pytest.raises(ServiceValidationError) as excinfo:
+        _run(_call(hass, SERVICE_GET_VISION_IMAGE, {"config_entry_id": "entry-1", "image_id": 5}))
+    err = excinfo.value
+    assert isinstance(err, ServiceValidationError)  # -> HTTP 400
+    assert err.translation_domain == DOMAIN
+    assert err.translation_key == "vision_image_wrong_device"
+
+
+def test_vision_response_service_passes_validation_error_through():
+    """The response-service guard must not swallow or reclassify a
+    ServiceValidationError -- it stays a 400 with its translated message.
+    """
+    async def handler(call):
+        raise ServiceValidationError(
+            translation_domain=DOMAIN, translation_key="vision_image_wrong_device"
+        )
+
+    wrapped = _vision_response_service(handler)
+    with pytest.raises(ServiceValidationError) as excinfo:
+        _run(wrapped(ServiceCall(domain=DOMAIN, service=SERVICE_GET_VISION_IMAGE, data={})))
+    assert excinfo.value.translation_key == "vision_image_wrong_device"
+
+
+def test_vision_response_service_wraps_unexpected_error_as_structured_500():
+    """An unexpected (non-HA) exception must not escape the response path as
+    aiohttp's opaque 500 page; it becomes a translated HomeAssistantError so
+    the caller sees a structured server error.
+    """
+    async def handler(call):
+        raise ValueError("kaboom")
+
+    wrapped = _vision_response_service(handler)
+    with pytest.raises(HomeAssistantError) as excinfo:
+        _run(wrapped(ServiceCall(domain=DOMAIN, service=SERVICE_GET_VISION_IMAGE, data={})))
+    err = excinfo.value
+    assert not isinstance(err, ServiceValidationError)  # server error, not validation
+    assert err.translation_key == "vision_unexpected_error"
 
 
 # --------------------------- apply_vision_radius ---------------------------
