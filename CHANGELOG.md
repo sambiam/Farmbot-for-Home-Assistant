@@ -3,6 +3,17 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.4.0 - Automatic new-photo analysis
+
+### Added
+
+- Polls FarmBot image metadata every 15 seconds and emits one targeted
+  `farmbot_vision_request` after each new photo finishes attachment processing.
+- Includes `image_id` in automatic requests so the companion analyses the new
+  frame without reprocessing its entire image lookback window.
+- Establishes a startup baseline, preventing old photos from being replayed
+  after an integration restart.
+
 ## 1.3.2 - Ship the Vision status fix to stable
 
 ### Fixed

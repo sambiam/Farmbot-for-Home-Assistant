@@ -41,6 +41,7 @@ from .const import (
     TOKEN_REFRESH_INTERVAL,
     VISION_ANALYSIS_MODES,
     VISION_CURVE_TYPE,
+    VISION_IMAGE_POLL_INTERVAL_SECONDS,
     VISION_STATUS_VALUES,
 )
 from .manager import FarmbotManager
@@ -790,6 +791,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_track_time_interval(hass, _periodic_token_check, refresh_interval)
     )
     _LOGGER.info("Token refresh scheduler started (interval: %s)", refresh_interval)
+
+    # Establish the processed-image baseline, then turn each newly completed
+    # FarmBot photo into a targeted companion-app request.
+    await manager.async_poll_new_vision_images()
+
+    async def _poll_new_vision_images(now):
+        await manager.async_poll_new_vision_images()
+
+    image_poll_interval = timedelta(seconds=VISION_IMAGE_POLL_INTERVAL_SECONDS)
+    entry.async_on_unload(
+        async_track_time_interval(hass, _poll_new_vision_images, image_poll_interval)
+    )
+    _LOGGER.info("FarmBot Vision image monitor started (interval: %s)", image_poll_interval)
 
     _async_register_services(hass)
 

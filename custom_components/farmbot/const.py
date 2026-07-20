@@ -18,6 +18,11 @@ SIGNAL_SEQUENCE_SELECTED = "farmbot_sequence_selected"
 TOKEN_REFRESH_WINDOW = 7 * 24 * 60 * 60  # 7 days in seconds
 TOKEN_REFRESH_INTERVAL = 6 * 60 * 60  # Check every 6 hours
 
+# Poll FarmBot's image metadata frequently enough for a completed camera upload
+# to become a vision request without depending on a particular log message or
+# firmware version. Only metadata is fetched here; JPEG bytes remain on-demand.
+VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
+
 # --------------------------------------------------------------------------
 # FarmBot Vision bridge
 # --------------------------------------------------------------------------

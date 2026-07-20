@@ -12,7 +12,8 @@ from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
-from .api import FarmbotApiClient
+from . import vision
+from .api import FarmbotApiClient, FarmbotApiError
 from .const import (
     API_BASE_URL,
     DEFAULT_ALLOW_AUTOMATIC_RADIUS_INCREASES,
@@ -21,6 +22,7 @@ from .const import (
     DEFAULT_MINIMUM_AUTOMATIC_CONFIDENCE,
     DEFAULT_VISION_ENABLED,
     DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+    EVENT_VISION_REQUEST,
     MQTT_PORT,
     OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
     OPTION_ALLOW_VISION_CURVE_WRITES,
@@ -104,6 +106,8 @@ class FarmbotManager:
         self.vision_automatically_applied: int = 0
         self.vision_uncertain: int = 0
         self._last_vision_report_snapshot: Optional[tuple] = None
+        self._known_ready_vision_image_ids: Optional[set[int]] = None
+        self._vision_image_monitor_started_at = dt_util.utcnow()
 
     # -------------------- Token Refresh --------------------
     def _should_refresh_token(self) -> bool:
@@ -513,6 +517,76 @@ class FarmbotManager:
         if changed:
             async_dispatcher_send(self.hass, SIGNAL_VISION_STATE)
         return changed
+
+    async def async_poll_new_vision_images(self) -> list[int]:
+        """Detect newly processed FarmBot photos and request their analysis.
+
+        FarmBot does not expose a stable image-complete MQTT event across all
+        supported firmware versions. Polling the small ``/images`` metadata
+        response is therefore the reliable bridge: image bytes are still only
+        downloaded by ``get_vision_image`` after the companion app accepts the
+        request. The first successful poll establishes a baseline so installing
+        or restarting the integration does not replay the whole image history.
+        """
+        try:
+            images = await self.api.async_get_images()
+        except FarmbotApiError as err:
+            _LOGGER.warning("Could not poll FarmBot images for Vision: %s", err)
+            return []
+
+        ready: dict[int, dict] = {}
+        for image in images:
+            if not isinstance(image, dict) or not vision.is_image_ready(image):
+                continue
+            if not vision.same_device(image.get("device_id"), self.device_id):
+                continue
+            try:
+                image_id = int(image["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            ready[image_id] = image
+
+        ready_ids = set(ready)
+        if self._known_ready_vision_image_ids is None:
+            # Do not replay historical photos on startup. A photo created after
+            # this manager started is not historical, even if it completed
+            # while the first metadata request was in flight.
+            new_ids = set()
+            for image_id, image in ready.items():
+                created = dt_util.parse_datetime(str(image.get("created_at") or ""))
+                if created is None:
+                    continue
+                try:
+                    created_after_start = created >= self._vision_image_monitor_started_at
+                except TypeError:
+                    created_after_start = False
+                if created_after_start:
+                    new_ids.add(image_id)
+        else:
+            new_ids = ready_ids - self._known_ready_vision_image_ids
+        if self._known_ready_vision_image_ids is None:
+            self._known_ready_vision_image_ids = ready_ids
+        else:
+            # Keep a durable in-memory seen set so a temporarily incomplete API
+            # response cannot make an older image look new on the next poll.
+            self._known_ready_vision_image_ids.update(ready_ids)
+
+        ordered_ids = sorted(
+            new_ids,
+            key=lambda image_id: str(ready[image_id].get("created_at") or ""),
+        )
+        for image_id in ordered_ids:
+            self.hass.bus.async_fire(
+                EVENT_VISION_REQUEST,
+                {
+                    "config_entry_id": self.entry_id,
+                    "device_id": self.device_id,
+                    "plant_ids": [],
+                    "image_id": image_id,
+                },
+            )
+            _LOGGER.info("Requested FarmBot Vision analysis for new image %s", image_id)
+        return ordered_ids
 
     async def async_close(self) -> None:
         """Release any FarmBot resources owned exclusively by this manager.

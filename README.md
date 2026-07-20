@@ -93,8 +93,9 @@ only ever talks to Home Assistant's service/event API.
   if curve writes are explicitly enabled (`farmbot.upsert_vision_spread_curve`)
 - Report its own status/heartbeat for display on Home Assistant entities
   (`farmbot.report_vision_status`)
-- Ask Home Assistant to fire a `farmbot_vision_request` event that an
-  automation can relay to the app (`farmbot.request_vision_analysis`)
+- Automatically fire a targeted `farmbot_vision_request` when a newly uploaded
+  FarmBot photo finishes processing, or fire one manually with
+  `farmbot.request_vision_analysis`
 
 ### Safety model
 
@@ -235,10 +236,10 @@ which coordinate system a calibration belongs to.
   involved in that check.
 - `farmbot.get_vision_inventory`/`get_vision_image` are on-demand, synchronous
   reads: nothing is cached across calls.
-- `farmbot.request_vision_analysis` only fires a Home Assistant event; it
-  does not connect to the Vision app's container directly. Wire an
-  automation to that event (or to the **FarmBot Analyse Plant Radii**
-  button, which fires the same event) to actually kick off analysis.
+- Newly processed FarmBot photos are detected from bounded metadata polling and
+  automatically sent to the companion app as targeted analysis events. The
+  **FarmBot Analyse Plant Radii** button and `farmbot.request_vision_analysis`
+  remain available for full-history/manual runs.
 
 ### Privacy and security
 

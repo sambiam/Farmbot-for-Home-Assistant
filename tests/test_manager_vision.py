@@ -3,15 +3,21 @@
 No network or MQTT calls are made; FarmbotApiClient is constructed for
 real (base-URL resolution is pure/local) but never invoked here.
 """
+import asyncio
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.util import dt as dt_util
 
-from custom_components.farmbot.const import SIGNAL_VISION_STATE
+from custom_components.farmbot.const import EVENT_VISION_REQUEST, SIGNAL_VISION_STATE
 from custom_components.farmbot.manager import FarmbotManager
 
+from .fake_api import FakeVisionApi
 from .helpers import FakeHass
+
+
+def _run(coro):
+    return asyncio.run(coro)
 
 
 def _make_manager(options=None):
@@ -77,6 +83,64 @@ def test_vision_is_available_true_just_under_timeout():
     manager.update_vision_status(available=True, status="idle")
     future = manager.vision_last_heartbeat + timedelta(minutes=9)
     assert manager.vision_is_available(now=future) is True
+
+
+def test_new_processed_image_fires_one_targeted_analysis_request():
+    hass, manager, _ = _make_manager()
+    manager.api = FakeVisionApi(
+        images=[
+            {
+                "id": 10,
+                "device_id": 42,
+                "created_at": "2020-01-01T00:00:00+00:00",
+                "attachment_processed_at": "2020-01-01T00:00:10+00:00",
+            }
+        ]
+    )
+
+    # Historical images establish the baseline and are never replayed.
+    assert _run(manager.async_poll_new_vision_images()) == []
+    assert hass.bus.fired == []
+
+    manager.api.images[11] = {
+        "id": 11,
+        "device_id": "device_42",
+        "created_at": dt_util.utcnow().isoformat(),
+        "attachment_processed_at": dt_util.utcnow().isoformat(),
+    }
+    assert _run(manager.async_poll_new_vision_images()) == [11]
+    assert hass.bus.fired == [
+        (
+            EVENT_VISION_REQUEST,
+            {
+                "config_entry_id": "entry-1",
+                "device_id": "42",
+                "plant_ids": [],
+                "image_id": 11,
+            },
+        )
+    ]
+
+    # Polling the same image again is idempotent.
+    assert _run(manager.async_poll_new_vision_images()) == []
+    assert len(hass.bus.fired) == 1
+
+
+def test_image_is_requested_only_after_farmbot_finishes_processing_it():
+    hass, manager, _ = _make_manager()
+    manager.api = FakeVisionApi()
+    assert _run(manager.async_poll_new_vision_images()) == []
+
+    manager.api.images[12] = {
+        "id": 12,
+        "device_id": 42,
+        "created_at": dt_util.utcnow().isoformat(),
+        "attachment_processed_at": None,
+    }
+    assert _run(manager.async_poll_new_vision_images()) == []
+    manager.api.images[12]["attachment_processed_at"] = dt_util.utcnow().isoformat()
+    assert _run(manager.async_poll_new_vision_images()) == [12]
+    assert hass.bus.fired[-1][1]["image_id"] == 12
 
 
 def test_vision_availability_does_not_trust_apps_self_reported_flag():
