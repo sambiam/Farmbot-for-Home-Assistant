@@ -22,6 +22,7 @@ from homeassistant.util import dt as dt_util
 from custom_components.farmbot import (
     DOMAIN,
     SERVICE_APPLY_VISION_RADIUS,
+    SERVICE_APPLY_VISION_REMOVAL,
     SERVICE_EXECUTE_SEQUENCE,
     SERVICE_GET_VISION_IMAGE,
     SERVICE_GET_VISION_INVENTORY,
@@ -70,6 +71,7 @@ def test_registers_all_services_with_one_entry():
     for service in (
         SERVICE_EXECUTE_SEQUENCE, SERVICE_MOVE_TO, SERVICE_LIST_VISION_BOTS,
         SERVICE_GET_VISION_INVENTORY, SERVICE_GET_VISION_IMAGE, SERVICE_APPLY_VISION_RADIUS,
+        SERVICE_APPLY_VISION_REMOVAL,
         SERVICE_UPSERT_VISION_SPREAD_CURVE, SERVICE_REPORT_VISION_STATUS,
         SERVICE_REQUEST_VISION_ANALYSIS,
     ):
@@ -93,6 +95,7 @@ def test_removes_all_services_after_final_entry_unloads():
     for service in (
         SERVICE_LIST_VISION_BOTS, SERVICE_GET_VISION_INVENTORY, SERVICE_GET_VISION_IMAGE,
         SERVICE_APPLY_VISION_RADIUS, SERVICE_UPSERT_VISION_SPREAD_CURVE,
+        SERVICE_APPLY_VISION_REMOVAL,
         SERVICE_REPORT_VISION_STATUS, SERVICE_REQUEST_VISION_ANALYSIS,
     ):
         assert not hass.services.has_service(DOMAIN, service)
@@ -578,6 +581,77 @@ def test_apply_vision_radius_rejects_shrink():
     assert manager.api.points[7]["radius"] == 120.0
 
 
+def test_apply_vision_radius_human_approval_bypasses_automatic_gates():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)  # automatic writes and confidence gate remain off/default
+    manager.api.points[7] = _plant_record(7)
+    _async_register_services(hass)
+
+    result = _run(_call(hass, SERVICE_APPLY_VISION_RADIUS, {
+        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
+        "expected_current_radius_mm": 120.0, "recommended_radius_mm": 150.0, "confidence": 0.1,
+        "apply": True, "human_approved": True,
+    }))
+    assert result["status"] == "applied"
+    assert manager.api.points[7]["radius"] == 150.0
+
+
+# --------------------------- apply_vision_removal ---------------------------
+
+def test_apply_vision_removal_dry_run_and_human_approval():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    manager.api.points[7] = _plant_record(7, plant_stage="planted")
+    _async_register_services(hass)
+    payload = {
+        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
+        "expected_current_radius_mm": 120.0, "confidence": 0.1,
+    }
+
+    dry_run = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, payload))
+    assert dry_run["status"] == "validated"
+    assert "async_archive_plant" not in manager.api.calls
+
+    result = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, {
+        **payload, "apply": True, "human_approved": True,
+    }))
+    assert result["status"] == "applied"
+    assert manager.api.points[7]["plant_stage"] == "removed"
+
+
+def test_apply_vision_removal_automatic_gate_and_stale_conflict():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    manager.api.points[7] = _plant_record(7, plant_stage="planted")
+    _async_register_services(hass)
+    payload = {
+        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
+        "expected_current_radius_mm": 120.0, "confidence": 0.9, "apply": True,
+    }
+    rejected = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, payload))
+    assert rejected["status"] == "rejected"
+    assert manager.api.points[7]["plant_stage"] == "planted"
+
+    manager.api.points[7]["radius"] = 200.0
+    conflict = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, {
+        **payload, "human_approved": True,
+    }))
+    assert conflict["status"] == "conflict"
+
+
+def test_apply_vision_removal_automatic_apply_when_enabled():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass, options={"allow_automatic_plant_removal": True})
+    manager.api.points[7] = _plant_record(7, plant_stage="planted")
+    _async_register_services(hass)
+
+    result = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, {
+        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
+        "expected_current_radius_mm": 120.0, "confidence": 0.9, "apply": True,
+    }))
+    assert result["status"] == "applied"
+
+
 # --------------------------- upsert_vision_spread_curve ---------------------------
 
 def test_upsert_curve_disabled_by_default():
@@ -589,6 +663,19 @@ def test_upsert_curve_disabled_by_default():
             "config_entry_id": "entry-1", "crop_slug": "tomato",
             "name": "[FarmBot Vision] Tomato", "data": {"0": 10, "20": 40}, "apply": False,
         }))
+
+
+def test_upsert_curve_human_approval_bypasses_automatic_gate():
+    hass = FakeHass()
+    _make_bot(hass)
+    _async_register_services(hass)
+
+    result = _run(_call(hass, SERVICE_UPSERT_VISION_SPREAD_CURVE, {
+        "config_entry_id": "entry-1", "crop_slug": "tomato",
+        "name": "[FarmBot Vision] Tomato", "data": {"0": 10, "20": 40},
+        "apply": False, "human_approved": True,
+    }))
+    assert result["status"] == "validated"
 
 
 def test_upsert_curve_rejects_monotonic_violation_when_enabled():

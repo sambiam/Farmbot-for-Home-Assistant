@@ -63,8 +63,9 @@ options flow. FarmBot credentials are never asked for again here. Options:
 | --- | --- | --- |
 | `vision_enabled` | off | Enables treating the bridge as active (informational; services are always registered, but enable this once you actually run the companion app) |
 | `vision_heartbeat_timeout_minutes` | 10 | How long since the last `farmbot.report_vision_status` call before "FarmBot Vision Available" turns off |
-| `allow_automatic_radius_increases` | off | Must be on for `farmbot.apply_vision_radius` to actually write a radius change, even when `apply: true` is passed |
-| `allow_vision_curve_writes` | off | Must be on for `farmbot.upsert_vision_spread_curve` to run at all |
+| `allow_automatic_radius_increases` | off | Must be on for unattended `farmbot.apply_vision_radius` writes; human-approved radius changes retain all hard safety checks but bypass automatic-only gates |
+| `allow_automatic_plant_removal` | off | Must be on for unattended `farmbot.apply_vision_removal` calls; human-approved removals still retain all validation checks |
+| `allow_vision_curve_writes` | off | Must be on for unattended `farmbot.upsert_vision_spread_curve` writes; human-approved curve edits still require all validation and ownership checks |
 | `maximum_plant_radius_mm` | 500 | Hard ceiling enforced independently of the app's recommendation |
 | `minimum_automatic_confidence` | 0.90 | `farmbot.apply_vision_radius` rejects an `apply: true` write whose `confidence` is below this, even if everything else validates |
 

@@ -444,6 +444,10 @@ def _is_finite_positive_number(value: Any) -> bool:
     return value > 0
 
 
+def _is_finite_nonnegative_number(value: Any) -> bool:
+    return not isinstance(value, bool) and (_is_finite_positive_number(value) or value == 0)
+
+
 def _is_positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
@@ -484,10 +488,11 @@ def validate_radius_change(
         return ValidationResult(False, "wrong_device")
     if point.get("pointer_type") != POINTER_TYPE_PLANT:
         return ValidationResult(False, "not_a_plant")
-    if point.get("discarded_at"):
+    stage = point.get("plant_stage")
+    if point.get("discarded_at") or (stage is not None and stage not in ACTIVE_PLANT_STAGES):
         return ValidationResult(False, "plant_archived")
 
-    if not _is_finite_positive_number(expected_current_radius_mm):
+    if not _is_finite_nonnegative_number(expected_current_radius_mm):
         return ValidationResult(False, "invalid_expected_current_radius_mm")
     if not _is_finite_positive_number(recommended_radius_mm):
         return ValidationResult(False, "invalid_recommended_radius_mm")
@@ -505,6 +510,39 @@ def validate_radius_change(
     if recommended_radius_mm < actual_radius and not allow_automatic_shrink:
         return ValidationResult(False, "shrink_not_allowed")
 
+    return ValidationResult(True, None)
+
+
+def validate_removal(
+    *,
+    point: dict[str, Any] | None,
+    device_id: Any,
+    expected_current_radius_mm: Any,
+) -> ValidationResult:
+    """Validate a reversible plant-removal request against fresh FarmBot data.
+
+    Removal deliberately has no radius-change limits, but it retains the
+    ownership, point-type, archived-state and stale-radius checks used by
+    radius updates.  A changed radius means the empty-canopy observation is
+    no longer safe to act on.
+    """
+    if point is None:
+        return ValidationResult(False, "plant_not_found")
+    if not same_device(point.get("device_id"), device_id):
+        return ValidationResult(False, "wrong_device")
+    if point.get("pointer_type") != POINTER_TYPE_PLANT:
+        return ValidationResult(False, "not_a_plant")
+    stage = point.get("plant_stage")
+    if point.get("discarded_at") or (stage is not None and stage not in ACTIVE_PLANT_STAGES):
+        return ValidationResult(False, "plant_archived")
+    if not _is_finite_nonnegative_number(expected_current_radius_mm):
+        return ValidationResult(False, "invalid_expected_current_radius_mm")
+
+    actual_radius = point.get("radius")
+    if not isinstance(actual_radius, (int, float)) or isinstance(actual_radius, bool):
+        return ValidationResult(False, "current_radius_unknown")
+    if abs(actual_radius - expected_current_radius_mm) > RADIUS_TOLERANCE_MM:
+        return ValidationResult(False, "stale_radius")
     return ValidationResult(True, None)
 
 

@@ -31,6 +31,7 @@
           "vision_enabled": "Enable FarmBot Vision bridge",
           "vision_heartbeat_timeout_minutes": "Vision heartbeat timeout (minutes)",
           "allow_automatic_radius_increases": "Allow automatic plant-radius increases",
+          "allow_automatic_plant_removal": "Allow automatic plant removal",
           "allow_vision_curve_writes": "Allow FarmBot Vision to create/update spread curves",
           "maximum_plant_radius_mm": "Maximum allowed plant radius (mm)",
           "minimum_automatic_confidence": "Minimum confidence for automatic changes"
@@ -155,6 +156,44 @@
         "apply": {
           "name": "Apply",
           "description": "If off (default), only validates and returns a dry-run result. If on, applies the change when allowed by integration options."
+        },
+        "human_approved": {
+          "name": "Human approved",
+          "description": "Marks this as a deliberate human approval. It bypasses automatic-write gates but never validation and safety checks."
+        }
+      }
+    },
+    "apply_vision_removal": {
+      "name": "Apply Vision removal",
+      "description": "Validate and optionally mark a vision-confirmed missing plant as removed. This is reversible: the FarmBot point is patched, never deleted.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot the plant belongs to."
+        },
+        "plant_id": {
+          "name": "Plant ID",
+          "description": "FarmBot point ID of the plant."
+        },
+        "measurement_id": {
+          "name": "Measurement ID",
+          "description": "UUID identifying this missing-plant observation."
+        },
+        "expected_current_radius_mm": {
+          "name": "Expected current radius (mm)",
+          "description": "The radius recorded when the absence was observed. Rejected if the plant has changed since then."
+        },
+        "confidence": {
+          "name": "Confidence",
+          "description": "Model confidence between 0 and 1."
+        },
+        "apply": {
+          "name": "Apply",
+          "description": "If off (default), only validates and returns a dry-run result."
+        },
+        "human_approved": {
+          "name": "Human approved",
+          "description": "Marks this as a deliberate human approval. It bypasses the automatic-removal option but not validation."
         }
       }
     },
@@ -189,6 +228,10 @@
         "apply": {
           "name": "Apply",
           "description": "If off (default), only validates and returns a dry-run result."
+        },
+        "human_approved": {
+          "name": "Human approved",
+          "description": "Marks this as a deliberate human approval. It bypasses the automatic curve-write option but not validation or ownership checks."
         }
       }
     },

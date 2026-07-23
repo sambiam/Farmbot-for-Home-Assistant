@@ -105,6 +105,18 @@ def test_patch_is_not_retried_on_server_error():
     assert len(session.calls) == 1
 
 
+def test_archive_plant_marks_plant_removed_without_delete():
+    session = FakeSession([FakeResponse(status=200, json_body={"id": 1, "plant_stage": "removed"})])
+    client = _client(session)
+
+    result = _run(client.async_archive_plant(1))
+
+    assert result["plant_stage"] == "removed"
+    assert session.calls[0][0] == "PATCH"
+    assert session.calls[0][1].endswith("/points/1")
+    assert session.calls[0][2]["json"] == {"plant_stage": "removed"}
+
+
 # --------------------------- auth failure handling ---------------------------
 
 def test_401_raises_auth_error_and_triggers_reauth_once():

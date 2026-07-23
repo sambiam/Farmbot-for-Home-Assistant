@@ -199,6 +199,51 @@ def test_validate_radius_change_rejects_non_positive_and_nan_values():
         assert result.reason == "invalid_recommended_radius_mm"
 
 
+def test_validate_removal_accepts_owned_current_plant():
+    result = vision.validate_removal(
+        point=_point(), device_id="42", expected_current_radius_mm=120.0
+    )
+    assert result.ok
+
+
+def test_validate_removal_rejects_stale_or_removed_plant():
+    stale = vision.validate_removal(
+        point=_point(radius=200.0), device_id="42", expected_current_radius_mm=120.0
+    )
+    removed = vision.validate_removal(
+        point=_point(plant_stage="removed"), device_id="42", expected_current_radius_mm=120.0
+    )
+    assert stale.reason == "stale_radius"
+    assert removed.reason == "plant_archived"
+
+
+def test_radius_and_removal_accept_zero_current_radius_but_reject_inactive_stages():
+    zero = _point(radius=0.0)
+    radius = vision.validate_radius_change(
+        point=zero,
+        device_id="42",
+        expected_current_radius_mm=0.0,
+        recommended_radius_mm=10.0,
+        allow_automatic_shrink=False,
+        maximum_plant_radius_mm=500,
+    )
+    removal = vision.validate_removal(
+        point=zero, device_id="42", expected_current_radius_mm=0.0
+    )
+    harvested = vision.validate_radius_change(
+        point=_point(plant_stage="harvested"),
+        device_id="42",
+        expected_current_radius_mm=120.0,
+        recommended_radius_mm=150.0,
+        allow_automatic_shrink=False,
+        maximum_plant_radius_mm=500,
+    )
+
+    assert radius.ok
+    assert removal.ok
+    assert harvested.reason == "plant_archived"
+
+
 # --------------------------- curve validation ---------------------------
 
 def test_validate_curve_name_requires_vision_prefix():

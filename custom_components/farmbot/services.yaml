@@ -141,6 +141,50 @@ apply_vision_radius:
     apply:
       selector:
         boolean:
+    human_approved:
+      selector:
+        boolean:
+
+apply_vision_removal:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    plant_id:
+      required: true
+      example: 4567
+      selector:
+        number:
+          min: 1
+          mode: box
+    measurement_id:
+      required: true
+      example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+      selector:
+        text:
+    expected_current_radius_mm:
+      required: true
+      example: 120
+      selector:
+        number:
+          mode: box
+          step: any
+    confidence:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+          mode: slider
+    apply:
+      selector:
+        boolean:
+    human_approved:
+      selector:
+        boolean:
 
 upsert_vision_spread_curve:
   fields:
@@ -173,6 +217,9 @@ upsert_vision_spread_curve:
         text:
           multiple: true
     apply:
+      selector:
+        boolean:
+    human_approved:
       selector:
         boolean:
 

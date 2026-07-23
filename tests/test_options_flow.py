@@ -36,6 +36,7 @@ def test_options_form_defaults_match_documented_defaults():
     assert defaults["vision_enabled"] is False
     assert defaults["vision_heartbeat_timeout_minutes"] == 10
     assert defaults["allow_automatic_radius_increases"] is False
+    assert defaults["allow_automatic_plant_removal"] is False
     assert defaults["allow_vision_curve_writes"] is False
     assert defaults["maximum_plant_radius_mm"] == 500
     assert defaults["minimum_automatic_confidence"] == 0.90
@@ -61,6 +62,7 @@ def test_options_step_saves_submitted_values():
         "vision_enabled": True,
         "vision_heartbeat_timeout_minutes": 5,
         "allow_automatic_radius_increases": False,
+        "allow_automatic_plant_removal": False,
         "allow_vision_curve_writes": True,
         "maximum_plant_radius_mm": 300,
         "minimum_automatic_confidence": 0.95,

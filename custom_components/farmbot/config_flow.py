@@ -8,6 +8,7 @@ from homeassistant.core import callback
 
 from .const import (
     API_BASE_URL,
+    DEFAULT_ALLOW_AUTOMATIC_PLANT_REMOVAL,
     DEFAULT_ALLOW_AUTOMATIC_RADIUS_INCREASES,
     DEFAULT_ALLOW_VISION_CURVE_WRITES,
     DEFAULT_MAXIMUM_PLANT_RADIUS_MM,
@@ -15,6 +16,7 @@ from .const import (
     DEFAULT_VISION_ENABLED,
     DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
     DOMAIN,
+    OPTION_ALLOW_AUTOMATIC_PLANT_REMOVAL,
     OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
     OPTION_ALLOW_VISION_CURVE_WRITES,
     OPTION_MAXIMUM_PLANT_RADIUS_MM,
@@ -236,6 +238,13 @@ class FarmbotOptionsFlow(config_entries.OptionsFlow):
                     ),
                 ): bool,
                 vol.Optional(
+                    OPTION_ALLOW_AUTOMATIC_PLANT_REMOVAL,
+                    default=current.get(
+                        OPTION_ALLOW_AUTOMATIC_PLANT_REMOVAL,
+                        DEFAULT_ALLOW_AUTOMATIC_PLANT_REMOVAL,
+                    ),
+                ): bool,
+                vol.Optional(
                     OPTION_ALLOW_VISION_CURVE_WRITES,
                     default=current.get(
                         OPTION_ALLOW_VISION_CURVE_WRITES, DEFAULT_ALLOW_VISION_CURVE_WRITES
@@ -256,4 +265,3 @@ class FarmbotOptionsFlow(config_entries.OptionsFlow):
             }
         )
         return self.async_show_form(step_id="init", data_schema=data_schema)
-

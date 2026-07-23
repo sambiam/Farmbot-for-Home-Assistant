@@ -77,6 +77,12 @@ class FakeVisionApi:
             self.points[point_id]["radius"] = radius_mm
         return self.points.get(point_id, {})
 
+    async def async_archive_plant(self, point_id):
+        self._record("async_archive_plant")
+        if point_id in self.points:
+            self.points[point_id]["plant_stage"] = "removed"
+        return self.points.get(point_id, {})
+
     async def async_create_curve(self, *, name, type_, data):
         self._record("async_create_curve")
         curve_id = self.next_curve_id

@@ -25,11 +25,13 @@ from .const import (
     EVENT_VISION_REQUEST,
     MAX_IMAGE_DIMENSION,
     MAX_IMAGE_LOOKBACK_HOURS,
+    OPTION_ALLOW_AUTOMATIC_PLANT_REMOVAL,
     OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
     OPTION_ALLOW_VISION_CURVE_WRITES,
     OPTION_MAXIMUM_PLANT_RADIUS_MM,
     OPTION_MINIMUM_AUTOMATIC_CONFIDENCE,
     SERVICE_APPLY_VISION_RADIUS,
+    SERVICE_APPLY_VISION_REMOVAL,
     SERVICE_EXECUTE_SEQUENCE,
     SERVICE_GET_VISION_IMAGE,
     SERVICE_GET_VISION_INVENTORY,
@@ -143,6 +145,19 @@ SERVICE_APPLY_VISION_RADIUS_SCHEMA = vol.Schema(
         vol.Required("recommended_radius_mm"): vol.Coerce(float),
         vol.Required("confidence"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
         vol.Optional("apply", default=False): cv.boolean,
+        vol.Optional("human_approved", default=False): cv.boolean,
+    }
+)
+
+SERVICE_APPLY_VISION_REMOVAL_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("plant_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Required("measurement_id"): _cv_uuid,
+        vol.Required("expected_current_radius_mm"): vol.Coerce(float),
+        vol.Required("confidence"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+        vol.Optional("apply", default=False): cv.boolean,
+        vol.Optional("human_approved", default=False): cv.boolean,
     }
 )
 
@@ -157,6 +172,7 @@ SERVICE_UPSERT_VISION_SPREAD_CURVE_SCHEMA = vol.Schema(
             vol.All(vol.Coerce(int), vol.Range(min=1))
         ],
         vol.Optional("apply", default=False): cv.boolean,
+        vol.Optional("human_approved", default=False): cv.boolean,
     }
 )
 
@@ -468,6 +484,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         recommended = call.data["recommended_radius_mm"]
         confidence = call.data["confidence"]
         apply = call.data["apply"]
+        human_approved = call.data["human_approved"]
 
         _LOGGER.info(
             "FarmBot Vision radius proposal: bot=%s plant=%s measurement=%s "
@@ -515,7 +532,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 "message": "Validated; dry run, no write performed",
             }
 
-        if not options[OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES]:
+        if not human_approved and not options[OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES]:
             return {
                 "status": "rejected",
                 "plant_id": plant_id,
@@ -525,7 +542,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 "message": "Automatic radius application is disabled in integration options",
             }
 
-        if confidence < options[OPTION_MINIMUM_AUTOMATIC_CONFIDENCE]:
+        if not human_approved and confidence < options[OPTION_MINIMUM_AUTOMATIC_CONFIDENCE]:
             return {
                 "status": "rejected",
                 "plant_id": plant_id,
@@ -559,10 +576,70 @@ def _async_register_services(hass: HomeAssistant) -> None:
             "message": "Radius updated",
         }
 
+    async def apply_vision_removal(call: ServiceCall) -> dict:
+        """Validate then reversibly archive a vision-confirmed missing plant."""
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        options = manager.vision_options()
+        plant_id = call.data["plant_id"]
+        measurement_id = call.data["measurement_id"]
+        expected = call.data["expected_current_radius_mm"]
+        apply = call.data["apply"]
+        human_approved = call.data["human_approved"]
+
+        point = await _safe_api_call(
+            manager, manager.api.async_get_point(plant_id), context="fetch plant"
+        )
+        result = vision.validate_removal(
+            point=point,
+            device_id=manager.device_id,
+            expected_current_radius_mm=expected,
+        )
+        actual_radius = point.get("radius") if isinstance(point, dict) else None
+        if not result.ok:
+            status = "conflict" if result.reason == "stale_radius" else "rejected"
+            message = _RADIUS_REJECTION_MESSAGES.get(result.reason, result.reason)
+            return {
+                "status": status,
+                "plant_id": plant_id,
+                "measurement_id": measurement_id,
+                "old_radius_mm": actual_radius,
+                "message": message,
+            }
+
+        if not apply:
+            return {
+                "status": "validated",
+                "plant_id": plant_id,
+                "measurement_id": measurement_id,
+                "old_radius_mm": actual_radius,
+                "message": "Validated; dry run, no write performed",
+            }
+
+        if not human_approved and not options[OPTION_ALLOW_AUTOMATIC_PLANT_REMOVAL]:
+            return {
+                "status": "rejected",
+                "plant_id": plant_id,
+                "measurement_id": measurement_id,
+                "old_radius_mm": actual_radius,
+                "message": "Automatic plant removal is disabled in integration options",
+            }
+
+        await _safe_api_call(
+            manager, manager.api.async_archive_plant(plant_id), context="archive plant"
+        )
+        _LOGGER.info("FarmBot Vision archived plant %s after removal confirmation", plant_id)
+        return {
+            "status": "applied",
+            "plant_id": plant_id,
+            "measurement_id": measurement_id,
+            "old_radius_mm": actual_radius,
+            "message": "Plant marked removed",
+        }
+
     async def upsert_vision_spread_curve(call: ServiceCall) -> dict:
         manager = _get_manager(hass, call.data["config_entry_id"])
         options = manager.vision_options()
-        if not options[OPTION_ALLOW_VISION_CURVE_WRITES]:
+        if not call.data["human_approved"] and not options[OPTION_ALLOW_VISION_CURVE_WRITES]:
             raise ServiceValidationError(
                 translation_domain=DOMAIN, translation_key="vision_curve_writes_disabled"
             )
@@ -727,6 +804,13 @@ def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        SERVICE_APPLY_VISION_REMOVAL,
+        apply_vision_removal,
+        schema=SERVICE_APPLY_VISION_REMOVAL_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_UPSERT_VISION_SPREAD_CURVE,
         upsert_vision_spread_curve,
         schema=SERVICE_UPSERT_VISION_SPREAD_CURVE_SCHEMA,
@@ -757,6 +841,7 @@ def _async_remove_services_if_last_entry(hass: HomeAssistant) -> None:
         SERVICE_GET_VISION_INVENTORY,
         SERVICE_GET_VISION_IMAGE,
         SERVICE_APPLY_VISION_RADIUS,
+        SERVICE_APPLY_VISION_REMOVAL,
         SERVICE_UPSERT_VISION_SPREAD_CURVE,
         SERVICE_REPORT_VISION_STATUS,
         SERVICE_REQUEST_VISION_ANALYSIS,

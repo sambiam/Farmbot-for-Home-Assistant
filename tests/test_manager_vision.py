@@ -39,6 +39,7 @@ def test_vision_options_returns_defaults_when_unset():
     assert options["vision_enabled"] is False
     assert options["vision_heartbeat_timeout_minutes"] == 10
     assert options["allow_automatic_radius_increases"] is False
+    assert options["allow_automatic_plant_removal"] is False
     assert options["allow_vision_curve_writes"] is False
     assert options["maximum_plant_radius_mm"] == 500
     assert options["minimum_automatic_confidence"] == 0.90

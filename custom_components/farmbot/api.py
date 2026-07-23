@@ -300,6 +300,21 @@ class FarmbotApiClient:
         )
         return data if isinstance(data, dict) else {}
 
+    async def async_archive_plant(self, point_id: int) -> dict:
+        """Reversibly mark a plant as removed without deleting the point.
+
+        FarmBot's point API accepts plant-stage updates.  Keeping the point
+        (rather than issuing DELETE) preserves its history and allows a user
+        to restore it later if the vision decision was incorrect.
+        """
+        data = await self._request_json(
+            "PATCH",
+            f"/points/{int(point_id)}",
+            json_body={"plant_stage": "removed"},
+            idempotent=False,
+        )
+        return data if isinstance(data, dict) else {}
+
     async def async_assign_curve_to_plant(self, point_id: int, curve_id: int | None) -> dict:
         """Assign (or, with curve_id=None, clear) a plant's spread curve."""
         data = await self._request_json(
