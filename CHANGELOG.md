@@ -3,6 +3,36 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.5.0 - Vision policy config moves to the app
+
+### Removed
+
+- The five FarmBot Vision policy options (`allow_automatic_radius_increases`,
+  `allow_automatic_plant_removal`, `allow_vision_curve_writes`,
+  `maximum_plant_radius_mm`, `minimum_automatic_confidence`) are gone from the
+  integration's options flow. They duplicated settings the FarmBot Vision app
+  already enforces via its own `Settings` (operating mode, growth/reduction
+  caps, confidence thresholds), with no link between the two copies — the
+  integration and the app could silently disagree on the same threshold.
+  **If you had customised any of these, the equivalent setting now needs to
+  be set in the FarmBot Vision app instead** (see the app's own settings) —
+  the integration ignores any leftover values for these keys in the config
+  entry.
+
+### Changed
+
+- `apply_vision_radius`, `apply_vision_removal`, and
+  `upsert_vision_spread_curve` no longer re-check confidence, radius caps, or
+  automatic-write permission before writing; they trust the `apply` /
+  `human_approved` flags the app already sends after applying its own policy.
+  The integration still independently re-verifies plant/curve *identity and
+  freshness* against live FarmBot data (device ownership, plant type,
+  archived state, stale `expected_current_radius_mm`, curve ownership) before
+  writing anything — that part is unchanged.
+- Only `vision_enabled` (master enable switch) and
+  `vision_heartbeat_timeout_minutes` (the integration's own availability
+  bookkeeping) remain in the options flow.
+
 ## 1.4.0 - Automatic new-photo analysis
 
 ### Added
