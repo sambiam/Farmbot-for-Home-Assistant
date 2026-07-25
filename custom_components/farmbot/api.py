@@ -300,6 +300,33 @@ class FarmbotApiClient:
         )
         return data if isinstance(data, dict) else {}
 
+    async def async_patch_plant_center(self, point_id: int, x: float, y: float) -> dict:
+        data = await self._request_json(
+            "PATCH",
+            f"/points/{int(point_id)}",
+            json_body={"x": x, "y": y},
+            idempotent=False,
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def async_create_weed(
+        self, *, name: str, x: float, y: float, z: float, radius: float
+    ) -> dict:
+        data = await self._request_json(
+            "POST",
+            "/points",
+            json_body={
+                "pointer_type": "Weed",
+                "name": name,
+                "x": x,
+                "y": y,
+                "z": z,
+                "radius": radius,
+            },
+            idempotent=False,
+        )
+        return data if isinstance(data, dict) else {}
+
     async def async_archive_plant(self, point_id: int) -> dict:
         """Reversibly mark a plant as removed without deleting the point.
 

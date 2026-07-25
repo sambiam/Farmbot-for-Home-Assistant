@@ -21,8 +21,10 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.farmbot import (
     DOMAIN,
+    SERVICE_APPLY_VISION_PLANT_CENTER,
     SERVICE_APPLY_VISION_RADIUS,
     SERVICE_APPLY_VISION_REMOVAL,
+    SERVICE_CREATE_VISION_WEED,
     SERVICE_EXECUTE_SEQUENCE,
     SERVICE_GET_VISION_IMAGE,
     SERVICE_GET_VISION_INVENTORY,
@@ -72,6 +74,7 @@ def test_registers_all_services_with_one_entry():
         SERVICE_EXECUTE_SEQUENCE, SERVICE_MOVE_TO, SERVICE_LIST_VISION_BOTS,
         SERVICE_GET_VISION_INVENTORY, SERVICE_GET_VISION_IMAGE, SERVICE_APPLY_VISION_RADIUS,
         SERVICE_APPLY_VISION_REMOVAL,
+        SERVICE_APPLY_VISION_PLANT_CENTER, SERVICE_CREATE_VISION_WEED,
         SERVICE_UPSERT_VISION_SPREAD_CURVE, SERVICE_REPORT_VISION_STATUS,
         SERVICE_REQUEST_VISION_ANALYSIS,
     ):
@@ -96,6 +99,7 @@ def test_removes_all_services_after_final_entry_unloads():
         SERVICE_LIST_VISION_BOTS, SERVICE_GET_VISION_INVENTORY, SERVICE_GET_VISION_IMAGE,
         SERVICE_APPLY_VISION_RADIUS, SERVICE_UPSERT_VISION_SPREAD_CURVE,
         SERVICE_APPLY_VISION_REMOVAL,
+        SERVICE_APPLY_VISION_PLANT_CENTER, SERVICE_CREATE_VISION_WEED,
         SERVICE_REPORT_VISION_STATUS, SERVICE_REQUEST_VISION_ANALYSIS,
     ):
         assert not hass.services.has_service(DOMAIN, service)
@@ -650,6 +654,62 @@ def test_apply_vision_removal_automatic_apply_when_enabled():
         "expected_current_radius_mm": 120.0, "confidence": 0.9, "apply": True,
     }))
     assert result["status"] == "applied"
+
+
+def test_move_center_requires_human_approval_and_checks_stale_coordinates():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    manager.api = FakeVisionApi(
+        points=[
+            {
+                "id": 8,
+                "pointer_type": "Plant",
+                "plant_stage": "planted",
+                "x": 100,
+                "y": 200,
+                "radius": 50,
+            }
+        ]
+    )
+    _async_register_services(hass)
+    payload = {
+        "config_entry_id": "entry-1",
+        "plant_id": 8,
+        "measurement_id": str(uuid.uuid4()),
+        "expected_x": 100,
+        "expected_y": 200,
+        "recommended_x": 112,
+        "recommended_y": 193,
+        "apply": True,
+        "human_approved": True,
+    }
+    result = _run(_call(hass, SERVICE_APPLY_VISION_PLANT_CENTER, payload))
+    assert result["status"] == "applied"
+    assert manager.api.points[8]["x"] == 112
+
+
+def test_create_vision_weed_supports_reviewed_write():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    _async_register_services(hass)
+    result = _run(
+        _call(
+            hass,
+            SERVICE_CREATE_VISION_WEED,
+            {
+                "config_entry_id": "entry-1",
+                "detection_id": str(uuid.uuid4()),
+                "x": 123,
+                "y": 456,
+                "radius": 15,
+                "confidence": 0.8,
+                "apply": True,
+                "human_approved": True,
+            },
+        )
+    )
+    assert result["status"] == "applied"
+    assert any(p["pointer_type"] == "Weed" for p in manager.api.points.values())
 
 
 # --------------------------- upsert_vision_spread_curve ---------------------------

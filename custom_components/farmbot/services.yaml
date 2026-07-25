@@ -186,6 +186,106 @@ apply_vision_removal:
       selector:
         boolean:
 
+apply_vision_plant_center:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    plant_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
+    measurement_id:
+      required: true
+      selector:
+        text:
+    expected_x:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    expected_y:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    recommended_x:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    recommended_y:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    apply:
+      selector:
+        boolean:
+    human_approved:
+      selector:
+        boolean:
+
+create_vision_weed:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    detection_id:
+      required: true
+      selector:
+        text:
+    x:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    y:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    z:
+      selector:
+        number:
+          mode: box
+          step: any
+    radius:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 250
+          mode: box
+    name:
+      selector:
+        text:
+    confidence:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+    apply:
+      selector:
+        boolean:
+    human_approved:
+      selector:
+        boolean:
+
 upsert_vision_spread_curve:
   fields:
     config_entry_id:

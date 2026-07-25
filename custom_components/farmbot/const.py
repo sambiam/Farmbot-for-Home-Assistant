@@ -39,6 +39,8 @@ SERVICE_GET_VISION_INVENTORY = "get_vision_inventory"
 SERVICE_GET_VISION_IMAGE = "get_vision_image"
 SERVICE_APPLY_VISION_RADIUS = "apply_vision_radius"
 SERVICE_APPLY_VISION_REMOVAL = "apply_vision_removal"
+SERVICE_APPLY_VISION_PLANT_CENTER = "apply_vision_plant_center"
+SERVICE_CREATE_VISION_WEED = "create_vision_weed"
 SERVICE_UPSERT_VISION_SPREAD_CURVE = "upsert_vision_spread_curve"
 SERVICE_REPORT_VISION_STATUS = "report_vision_status"
 SERVICE_REQUEST_VISION_ANALYSIS = "request_vision_analysis"
@@ -83,7 +85,7 @@ VISION_STATUS_VALUES = ("unavailable", "idle", "running", "warning", "error")
 
 # Image lookback bounds for farmbot.get_vision_inventory
 DEFAULT_IMAGE_LOOKBACK_HOURS = 72
-MAX_IMAGE_LOOKBACK_HOURS = 24 * 14  # two weeks
+MAX_IMAGE_LOOKBACK_HOURS = 24 * 30  # re-analysis picker supports one month
 
 # Image resize defaults for farmbot.get_vision_image
 DEFAULT_IMAGE_MAX_WIDTH = 640

@@ -30,8 +30,10 @@ from .const import (
     OPTION_ALLOW_VISION_CURVE_WRITES,
     OPTION_MAXIMUM_PLANT_RADIUS_MM,
     OPTION_MINIMUM_AUTOMATIC_CONFIDENCE,
+    SERVICE_APPLY_VISION_PLANT_CENTER,
     SERVICE_APPLY_VISION_RADIUS,
     SERVICE_APPLY_VISION_REMOVAL,
+    SERVICE_CREATE_VISION_WEED,
     SERVICE_EXECUTE_SEQUENCE,
     SERVICE_GET_VISION_IMAGE,
     SERVICE_GET_VISION_INVENTORY,
@@ -155,6 +157,35 @@ SERVICE_APPLY_VISION_REMOVAL_SCHEMA = vol.Schema(
         vol.Required("plant_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
         vol.Required("measurement_id"): _cv_uuid,
         vol.Required("expected_current_radius_mm"): vol.Coerce(float),
+        vol.Required("confidence"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+        vol.Optional("apply", default=False): cv.boolean,
+        vol.Optional("human_approved", default=False): cv.boolean,
+    }
+)
+
+SERVICE_APPLY_VISION_PLANT_CENTER_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("plant_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Required("measurement_id"): _cv_uuid,
+        vol.Required("expected_x"): vol.Coerce(float),
+        vol.Required("expected_y"): vol.Coerce(float),
+        vol.Required("recommended_x"): vol.Coerce(float),
+        vol.Required("recommended_y"): vol.Coerce(float),
+        vol.Optional("apply", default=False): cv.boolean,
+        vol.Optional("human_approved", default=False): cv.boolean,
+    }
+)
+
+SERVICE_CREATE_VISION_WEED_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("detection_id"): _cv_uuid,
+        vol.Required("x"): vol.Coerce(float),
+        vol.Required("y"): vol.Coerce(float),
+        vol.Optional("z", default=0): vol.Coerce(float),
+        vol.Required("radius"): vol.All(vol.Coerce(float), vol.Range(min=1, max=250)),
+        vol.Optional("name", default="Vision detected weed"): cv.string,
         vol.Required("confidence"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
         vol.Optional("apply", default=False): cv.boolean,
         vol.Optional("human_approved", default=False): cv.boolean,
@@ -636,6 +667,75 @@ def _async_register_services(hass: HomeAssistant) -> None:
             "message": "Plant marked removed",
         }
 
+    async def apply_vision_plant_center(call: ServiceCall) -> dict:
+        """Move a plant only after verifying its coordinates have not changed."""
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        point = await _safe_api_call(
+            manager,
+            manager.api.async_get_point(call.data["plant_id"]),
+            context="fetch plant for centre update",
+        )
+        if not isinstance(point, dict) or point.get("pointer_type") != "Plant":
+            return {"status": "rejected", "message": "Plant was not found"}
+        if (
+            abs(float(point.get("x", 0)) - call.data["expected_x"]) > 0.5
+            or abs(float(point.get("y", 0)) - call.data["expected_y"]) > 0.5
+        ):
+            return {"status": "conflict", "message": "Plant coordinates changed"}
+        if not call.data["apply"]:
+            return {"status": "validated", "message": "Validated; no write performed"}
+        if not call.data["human_approved"]:
+            return {"status": "rejected", "message": "Plant centre moves require human approval"}
+        updated = await _safe_api_call(
+            manager,
+            manager.api.async_patch_plant_center(
+                call.data["plant_id"],
+                call.data["recommended_x"],
+                call.data["recommended_y"],
+            ),
+            context="move plant centre",
+        )
+        return {
+            "status": "applied",
+            "plant_id": call.data["plant_id"],
+            "measurement_id": call.data["measurement_id"],
+            "x": updated.get("x", call.data["recommended_x"]),
+            "y": updated.get("y", call.data["recommended_y"]),
+            "message": "Plant centre moved",
+        }
+
+    async def create_vision_weed(call: ServiceCall) -> dict:
+        """Create a FarmBot Weed point from a calibrated vision detection."""
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        if not call.data["apply"]:
+            return {"status": "validated", "message": "Validated; no write performed"}
+        if (
+            not call.data["human_approved"]
+            and call.data["confidence"]
+            < manager.vision_options()[OPTION_MINIMUM_AUTOMATIC_CONFIDENCE]
+        ):
+            return {
+                "status": "rejected",
+                "message": "Confidence is below the configured automatic threshold",
+            }
+        created = await _safe_api_call(
+            manager,
+            manager.api.async_create_weed(
+                name=call.data["name"],
+                x=call.data["x"],
+                y=call.data["y"],
+                z=call.data["z"],
+                radius=call.data["radius"],
+            ),
+            context="create vision weed",
+        )
+        return {
+            "status": "applied",
+            "weed_id": created.get("id"),
+            "detection_id": call.data["detection_id"],
+            "message": "Weed created",
+        }
+
     async def upsert_vision_spread_curve(call: ServiceCall) -> dict:
         manager = _get_manager(hass, call.data["config_entry_id"])
         options = manager.vision_options()
@@ -811,6 +911,20 @@ def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        SERVICE_APPLY_VISION_PLANT_CENTER,
+        apply_vision_plant_center,
+        schema=SERVICE_APPLY_VISION_PLANT_CENTER_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CREATE_VISION_WEED,
+        create_vision_weed,
+        schema=SERVICE_CREATE_VISION_WEED_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_UPSERT_VISION_SPREAD_CURVE,
         upsert_vision_spread_curve,
         schema=SERVICE_UPSERT_VISION_SPREAD_CURVE_SCHEMA,
@@ -842,6 +956,8 @@ def _async_remove_services_if_last_entry(hass: HomeAssistant) -> None:
         SERVICE_GET_VISION_IMAGE,
         SERVICE_APPLY_VISION_RADIUS,
         SERVICE_APPLY_VISION_REMOVAL,
+        SERVICE_APPLY_VISION_PLANT_CENTER,
+        SERVICE_CREATE_VISION_WEED,
         SERVICE_UPSERT_VISION_SPREAD_CURVE,
         SERVICE_REPORT_VISION_STATUS,
         SERVICE_REQUEST_VISION_ANALYSIS,

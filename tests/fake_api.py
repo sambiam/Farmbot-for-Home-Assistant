@@ -25,6 +25,7 @@ class FakeVisionApi:
         self.api_error_on: set[str] = set()
         self.fail_assign_once_for: set[int] = set()
         self.next_curve_id = 1000
+        self.next_point_id = max(self.points, default=0) + 1
         # Mirrors FarmbotApiClient: a 401/403 invokes the reauth callback
         # before the exception propagates, so tests can assert reauth
         # dedup logic the same way they would against the real client.
@@ -82,6 +83,27 @@ class FakeVisionApi:
         if point_id in self.points:
             self.points[point_id]["plant_stage"] = "removed"
         return self.points.get(point_id, {})
+
+    async def async_patch_plant_center(self, point_id, x, y):
+        self._record("async_patch_plant_center")
+        if point_id in self.points:
+            self.points[point_id].update({"x": x, "y": y})
+        return self.points.get(point_id, {})
+
+    async def async_create_weed(self, *, name, x, y, z, radius):
+        self._record("async_create_weed")
+        point = {
+            "id": self.next_point_id,
+            "pointer_type": "Weed",
+            "name": name,
+            "x": x,
+            "y": y,
+            "z": z,
+            "radius": radius,
+        }
+        self.next_point_id += 1
+        self.points[point["id"]] = point
+        return point
 
     async def async_create_curve(self, *, name, type_, data):
         self._record("async_create_curve")
