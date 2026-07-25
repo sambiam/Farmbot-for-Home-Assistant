@@ -600,6 +600,37 @@ def test_apply_vision_radius_human_approval_bypasses_automatic_gates():
     assert manager.api.points[7]["radius"] == 150.0
 
 
+def test_apply_vision_radius_does_not_claim_success_when_patch_is_not_persisted():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+
+    class NonPersistingApi(FakeVisionApi):
+        async def async_patch_plant_radius(self, point_id, radius_mm):
+            self._record("async_patch_plant_radius")
+            return {**self.points[point_id], "radius": radius_mm}
+
+    manager.api = NonPersistingApi(points=[_plant_record(8, radius=100)])
+    _async_register_services(hass)
+    result = _run(
+        _call(
+            hass,
+            SERVICE_APPLY_VISION_RADIUS,
+            {
+                "config_entry_id": "entry-1",
+                "plant_id": 8,
+                "measurement_id": str(uuid.uuid4()),
+                "expected_current_radius_mm": 100,
+                "recommended_radius_mm": 120,
+                "confidence": 0.99,
+                "apply": True,
+                "human_approved": True,
+            },
+        )
+    )
+    assert result["status"] == "conflict"
+    assert "did not persist" in result["message"]
+
+
 # --------------------------- apply_vision_removal ---------------------------
 
 def test_apply_vision_removal_dry_run_and_human_approval():

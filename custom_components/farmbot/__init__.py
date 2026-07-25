@@ -1,4 +1,5 @@
 """The FarmBot integration, including the FarmBot Vision bridge services."""
+import asyncio
 import base64
 import functools
 import logging
@@ -588,12 +589,33 @@ def _async_register_services(hass: HomeAssistant) -> None:
             manager.api.async_patch_plant_radius(plant_id, recommended),
             context="update plant radius",
         )
-        updated_point = await _safe_api_call(
-            manager, manager.api.async_get_point(plant_id), context="re-fetch plant"
-        )
-        new_radius = (
-            updated_point.get("radius") if isinstance(updated_point, dict) else recommended
-        )
+        updated_point = None
+        new_radius = None
+        for attempt in range(3):
+            updated_point = await _safe_api_call(
+                manager, manager.api.async_get_point(plant_id), context="verify plant radius"
+            )
+            new_radius = (
+                updated_point.get("radius") if isinstance(updated_point, dict) else None
+            )
+            if isinstance(new_radius, (int, float)) and abs(new_radius - recommended) <= 0.5:
+                break
+            if attempt < 2:
+                await asyncio.sleep(0.25 * (attempt + 1))
+        if not isinstance(new_radius, (int, float)) or abs(new_radius - recommended) > 0.5:
+            _LOGGER.error(
+                "FarmBot accepted the radius PATCH for plant %s but verification returned %r",
+                plant_id,
+                new_radius,
+            )
+            return {
+                "status": "conflict",
+                "plant_id": plant_id,
+                "measurement_id": measurement_id,
+                "old_radius_mm": actual_radius,
+                "new_radius_mm": new_radius,
+                "message": "FarmBot did not persist the requested radius",
+            }
         _LOGGER.info(
             "FarmBot Vision applied radius change for plant %s: %s mm -> %s mm",
             plant_id, actual_radius, new_radius,
@@ -810,6 +832,22 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 context="update curve",
             )
         new_curve_id = curve.get("id", curve_id)
+        verified_curve = await _safe_api_call(
+            manager,
+            manager.api.async_get_curve(new_curve_id),
+            context="verify curve data",
+        )
+        expected_curve_data = {str(day): int(value) for day, value in data.items()}
+        actual_curve_data = (
+            {
+                str(day): int(value)
+                for day, value in (verified_curve.get("data") or {}).items()
+            }
+            if isinstance(verified_curve, dict)
+            else {}
+        )
+        if actual_curve_data != expected_curve_data:
+            raise HomeAssistantError("FarmBot did not persist the requested spread curve data")
 
         assignments = []
         applied: list[tuple[int, Any]] = []
@@ -822,6 +860,18 @@ def _async_register_services(hass: HomeAssistant) -> None:
                     context="assign curve to plant",
                 )
                 applied.append((plant_id, previous_curve_id))
+                verified_plant = await _safe_api_call(
+                    manager,
+                    manager.api.async_get_point(plant_id),
+                    context="verify curve assignment",
+                )
+                if (
+                    not isinstance(verified_plant, dict)
+                    or verified_plant.get("spread_curve_id") != new_curve_id
+                ):
+                    raise HomeAssistantError(
+                        f"FarmBot did not persist curve assignment for plant {plant_id}"
+                    )
                 assignments.append({"plant_id": plant_id, "status": "assigned"})
         except HomeAssistantError:
             rollback_failed = []
