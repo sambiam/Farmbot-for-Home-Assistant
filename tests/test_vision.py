@@ -111,8 +111,6 @@ def test_validate_radius_change_accepts_valid_increase():
         device_id="42",
         expected_current_radius_mm=120.0,
         recommended_radius_mm=150.0,
-        allow_automatic_shrink=False,
-        maximum_plant_radius_mm=500,
     )
     assert result.ok
 
@@ -120,7 +118,7 @@ def test_validate_radius_change_accepts_valid_increase():
 def test_validate_radius_change_rejects_missing_plant():
     result = vision.validate_radius_change(
         point=None, device_id="42", expected_current_radius_mm=120.0,
-        recommended_radius_mm=150.0, allow_automatic_shrink=False, maximum_plant_radius_mm=500,
+        recommended_radius_mm=150.0,
     )
     assert not result.ok
     assert result.reason == "plant_not_found"
@@ -129,7 +127,7 @@ def test_validate_radius_change_rejects_missing_plant():
 def test_validate_radius_change_rejects_wrong_device():
     result = vision.validate_radius_change(
         point=_point(device_id="99"), device_id="42", expected_current_radius_mm=120.0,
-        recommended_radius_mm=150.0, allow_automatic_shrink=False, maximum_plant_radius_mm=500,
+        recommended_radius_mm=150.0,
     )
     assert not result.ok
     assert result.reason == "wrong_device"
@@ -138,7 +136,7 @@ def test_validate_radius_change_rejects_wrong_device():
 def test_validate_radius_change_rejects_non_plant_pointer():
     result = vision.validate_radius_change(
         point=_point(pointer_type="Weed"), device_id="42", expected_current_radius_mm=120.0,
-        recommended_radius_mm=150.0, allow_automatic_shrink=False, maximum_plant_radius_mm=500,
+        recommended_radius_mm=150.0,
     )
     assert not result.ok
     assert result.reason == "not_a_plant"
@@ -148,7 +146,6 @@ def test_validate_radius_change_rejects_archived_plant():
     result = vision.validate_radius_change(
         point=_point(discarded_at="2026-01-01"), device_id="42",
         expected_current_radius_mm=120.0, recommended_radius_mm=150.0,
-        allow_automatic_shrink=False, maximum_plant_radius_mm=500,
     )
     assert not result.ok
     assert result.reason == "plant_archived"
@@ -157,7 +154,7 @@ def test_validate_radius_change_rejects_archived_plant():
 def test_validate_radius_change_detects_stale_current_radius():
     result = vision.validate_radius_change(
         point=_point(radius=200.0), device_id="42", expected_current_radius_mm=120.0,
-        recommended_radius_mm=150.0, allow_automatic_shrink=False, maximum_plant_radius_mm=500,
+        recommended_radius_mm=150.0,
     )
     assert not result.ok
     assert result.reason == "stale_radius"
@@ -166,34 +163,28 @@ def test_validate_radius_change_detects_stale_current_radius():
 def test_validate_radius_change_tolerates_small_rounding_difference():
     result = vision.validate_radius_change(
         point=_point(radius=120.3), device_id="42", expected_current_radius_mm=120.0,
-        recommended_radius_mm=150.0, allow_automatic_shrink=False, maximum_plant_radius_mm=500,
+        recommended_radius_mm=150.0,
     )
     assert result.ok
 
 
-def test_validate_radius_change_rejects_shrink_when_not_allowed():
+def test_validate_radius_change_allows_shrink():
+    # Automatic-shrink permission and the maximum-radius cap are the FarmBot
+    # Vision app's responsibility (its own settings already govern every
+    # write it proposes); the integration only re-verifies plant identity
+    # and freshness against FarmBot's live data.
     result = vision.validate_radius_change(
         point=_point(radius=120.0), device_id="42", expected_current_radius_mm=120.0,
-        recommended_radius_mm=90.0, allow_automatic_shrink=False, maximum_plant_radius_mm=500,
+        recommended_radius_mm=90.0,
     )
-    assert not result.ok
-    assert result.reason == "shrink_not_allowed"
-
-
-def test_validate_radius_change_rejects_exceeding_maximum():
-    result = vision.validate_radius_change(
-        point=_point(), device_id="42", expected_current_radius_mm=120.0,
-        recommended_radius_mm=9000.0, allow_automatic_shrink=False, maximum_plant_radius_mm=500,
-    )
-    assert not result.ok
-    assert result.reason == "radius_exceeds_maximum"
+    assert result.ok
 
 
 def test_validate_radius_change_rejects_non_positive_and_nan_values():
     for bad in (0, -5, float("nan")):
         result = vision.validate_radius_change(
             point=_point(), device_id="42", expected_current_radius_mm=120.0,
-            recommended_radius_mm=bad, allow_automatic_shrink=False, maximum_plant_radius_mm=500,
+            recommended_radius_mm=bad,
         )
         assert not result.ok
         assert result.reason == "invalid_recommended_radius_mm"
@@ -224,8 +215,6 @@ def test_radius_and_removal_accept_zero_current_radius_but_reject_inactive_stage
         device_id="42",
         expected_current_radius_mm=0.0,
         recommended_radius_mm=10.0,
-        allow_automatic_shrink=False,
-        maximum_plant_radius_mm=500,
     )
     removal = vision.validate_removal(
         point=zero, device_id="42", expected_current_radius_mm=0.0
@@ -235,8 +224,6 @@ def test_radius_and_removal_accept_zero_current_radius_but_reject_inactive_stage
         device_id="42",
         expected_current_radius_mm=120.0,
         recommended_radius_mm=150.0,
-        allow_automatic_shrink=False,
-        maximum_plant_radius_mm=500,
     )
 
     assert radius.ok

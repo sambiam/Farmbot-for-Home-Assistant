@@ -8,19 +8,9 @@ from homeassistant.core import callback
 
 from .const import (
     API_BASE_URL,
-    DEFAULT_ALLOW_AUTOMATIC_PLANT_REMOVAL,
-    DEFAULT_ALLOW_AUTOMATIC_RADIUS_INCREASES,
-    DEFAULT_ALLOW_VISION_CURVE_WRITES,
-    DEFAULT_MAXIMUM_PLANT_RADIUS_MM,
-    DEFAULT_MINIMUM_AUTOMATIC_CONFIDENCE,
     DEFAULT_VISION_ENABLED,
     DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
     DOMAIN,
-    OPTION_ALLOW_AUTOMATIC_PLANT_REMOVAL,
-    OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
-    OPTION_ALLOW_VISION_CURVE_WRITES,
-    OPTION_MAXIMUM_PLANT_RADIUS_MM,
-    OPTION_MINIMUM_AUTOMATIC_CONFIDENCE,
     OPTION_VISION_ENABLED,
     OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES,
 )
@@ -230,38 +220,6 @@ class FarmbotOptionsFlow(config_entries.OptionsFlow):
                         DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
                     ),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=120)),
-                vol.Optional(
-                    OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
-                    default=current.get(
-                        OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
-                        DEFAULT_ALLOW_AUTOMATIC_RADIUS_INCREASES,
-                    ),
-                ): bool,
-                vol.Optional(
-                    OPTION_ALLOW_AUTOMATIC_PLANT_REMOVAL,
-                    default=current.get(
-                        OPTION_ALLOW_AUTOMATIC_PLANT_REMOVAL,
-                        DEFAULT_ALLOW_AUTOMATIC_PLANT_REMOVAL,
-                    ),
-                ): bool,
-                vol.Optional(
-                    OPTION_ALLOW_VISION_CURVE_WRITES,
-                    default=current.get(
-                        OPTION_ALLOW_VISION_CURVE_WRITES, DEFAULT_ALLOW_VISION_CURVE_WRITES
-                    ),
-                ): bool,
-                vol.Optional(
-                    OPTION_MAXIMUM_PLANT_RADIUS_MM,
-                    default=current.get(
-                        OPTION_MAXIMUM_PLANT_RADIUS_MM, DEFAULT_MAXIMUM_PLANT_RADIUS_MM
-                    ),
-                ): vol.All(vol.Coerce(float), vol.Range(min=1, max=5000)),
-                vol.Optional(
-                    OPTION_MINIMUM_AUTOMATIC_CONFIDENCE,
-                    default=current.get(
-                        OPTION_MINIMUM_AUTOMATIC_CONFIDENCE, DEFAULT_MINIMUM_AUTOMATIC_CONFIDENCE
-                    ),
-                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
             }
         )
         return self.async_show_form(step_id="init", data_schema=data_schema)

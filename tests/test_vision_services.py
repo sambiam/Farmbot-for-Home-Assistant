@@ -504,9 +504,9 @@ def test_apply_vision_radius_dry_run_validated():
     assert "async_patch_plant_radius" not in manager.api.calls
 
 
-def test_apply_vision_radius_applies_when_enabled():
+def test_apply_vision_radius_applies_when_requested():
     hass = FakeHass()
-    manager, _ = _make_bot(hass, options={"allow_automatic_radius_increases": True})
+    manager, _ = _make_bot(hass)
     manager.api.points[7] = _plant_record(7)
     _async_register_services(hass)
 
@@ -521,43 +521,27 @@ def test_apply_vision_radius_applies_when_enabled():
     assert manager.api.points[7]["radius"] == 150.0
 
 
-def test_apply_vision_radius_rejected_when_automatic_writes_disabled():
+def test_apply_vision_radius_applies_regardless_of_confidence():
+    # Confidence thresholds are the FarmBot Vision app's responsibility (it
+    # already decides whether to send apply=True via its own settings); the
+    # integration no longer re-checks confidence before writing.
     hass = FakeHass()
-    manager, _ = _make_bot(hass)  # allow_automatic_radius_increases defaults False
+    manager, _ = _make_bot(hass)
     manager.api.points[7] = _plant_record(7)
     _async_register_services(hass)
 
     result = _run(_call(hass, SERVICE_APPLY_VISION_RADIUS, {
         "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
-        "expected_current_radius_mm": 120.0, "recommended_radius_mm": 150.0, "confidence": 0.9,
+        "expected_current_radius_mm": 120.0, "recommended_radius_mm": 150.0, "confidence": 0.1,
         "apply": True,
     }))
-    assert result["status"] == "rejected"
-    assert manager.api.points[7]["radius"] == 120.0
-
-
-def test_apply_vision_radius_rejects_low_confidence_when_applying():
-    hass = FakeHass()
-    manager, _ = _make_bot(hass, options={
-        "allow_automatic_radius_increases": True,
-        "minimum_automatic_confidence": 0.9,
-    })
-    manager.api.points[7] = _plant_record(7)
-    _async_register_services(hass)
-
-    result = _run(_call(hass, SERVICE_APPLY_VISION_RADIUS, {
-        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
-        "expected_current_radius_mm": 120.0, "recommended_radius_mm": 150.0, "confidence": 0.5,
-        "apply": True,
-    }))
-    assert result["status"] == "rejected"
-    assert "confidence" in result["message"].lower()
-    assert manager.api.points[7]["radius"] == 120.0
+    assert result["status"] == "applied"
+    assert manager.api.points[7]["radius"] == 150.0
 
 
 def test_apply_vision_radius_stale_radius_is_conflict():
     hass = FakeHass()
-    manager, _ = _make_bot(hass, options={"allow_automatic_radius_increases": True})
+    manager, _ = _make_bot(hass)
     manager.api.points[7] = _plant_record(7, radius=200.0)
     _async_register_services(hass)
 
@@ -569,9 +553,11 @@ def test_apply_vision_radius_stale_radius_is_conflict():
     assert result["status"] == "conflict"
 
 
-def test_apply_vision_radius_rejects_shrink():
+def test_apply_vision_radius_allows_shrink_of_any_size():
+    # The automatic-shrink permission and reduction-size cap used to live in
+    # integration options; both are now the app's responsibility.
     hass = FakeHass()
-    manager, _ = _make_bot(hass, options={"allow_automatic_radius_increases": True})
+    manager, _ = _make_bot(hass)
     manager.api.points[7] = _plant_record(7)
     _async_register_services(hass)
 
@@ -580,24 +566,8 @@ def test_apply_vision_radius_rejects_shrink():
         "expected_current_radius_mm": 120.0, "recommended_radius_mm": 90.0, "confidence": 0.9,
         "apply": True,
     }))
-    assert result["status"] == "rejected"
-    assert "shrink" in result["message"].lower()
-    assert manager.api.points[7]["radius"] == 120.0
-
-
-def test_apply_vision_radius_human_approval_bypasses_automatic_gates():
-    hass = FakeHass()
-    manager, _ = _make_bot(hass)  # automatic writes and confidence gate remain off/default
-    manager.api.points[7] = _plant_record(7)
-    _async_register_services(hass)
-
-    result = _run(_call(hass, SERVICE_APPLY_VISION_RADIUS, {
-        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
-        "expected_current_radius_mm": 120.0, "recommended_radius_mm": 150.0, "confidence": 0.1,
-        "apply": True, "human_approved": True,
-    }))
     assert result["status"] == "applied"
-    assert manager.api.points[7]["radius"] == 150.0
+    assert manager.api.points[7]["radius"] == 90.0
 
 
 def test_apply_vision_radius_does_not_claim_success_when_patch_is_not_persisted():
@@ -654,29 +624,23 @@ def test_apply_vision_removal_dry_run_and_human_approval():
     assert manager.api.points[7]["plant_stage"] == "removed"
 
 
-def test_apply_vision_removal_automatic_gate_and_stale_conflict():
+def test_apply_vision_removal_stale_radius_is_conflict():
     hass = FakeHass()
     manager, _ = _make_bot(hass)
-    manager.api.points[7] = _plant_record(7, plant_stage="planted")
+    manager.api.points[7] = _plant_record(7, plant_stage="planted", radius=200.0)
     _async_register_services(hass)
     payload = {
         "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
         "expected_current_radius_mm": 120.0, "confidence": 0.9, "apply": True,
     }
-    rejected = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, payload))
-    assert rejected["status"] == "rejected"
+    conflict = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, payload))
+    assert conflict["status"] == "conflict"
     assert manager.api.points[7]["plant_stage"] == "planted"
 
-    manager.api.points[7]["radius"] = 200.0
-    conflict = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, {
-        **payload, "human_approved": True,
-    }))
-    assert conflict["status"] == "conflict"
 
-
-def test_apply_vision_removal_automatic_apply_when_enabled():
+def test_apply_vision_removal_applies_when_requested():
     hass = FakeHass()
-    manager, _ = _make_bot(hass, options={"allow_automatic_plant_removal": True})
+    manager, _ = _make_bot(hass)
     manager.api.points[7] = _plant_record(7, plant_stage="planted")
     _async_register_services(hass)
 
@@ -745,33 +709,21 @@ def test_create_vision_weed_supports_reviewed_write():
 
 # --------------------------- upsert_vision_spread_curve ---------------------------
 
-def test_upsert_curve_disabled_by_default():
-    hass = FakeHass()
-    _make_bot(hass)
-    _async_register_services(hass)
-    with pytest.raises(ServiceValidationError):
-        _run(_call(hass, SERVICE_UPSERT_VISION_SPREAD_CURVE, {
-            "config_entry_id": "entry-1", "crop_slug": "tomato",
-            "name": "[FarmBot Vision] Tomato", "data": {"0": 10, "20": 40}, "apply": False,
-        }))
-
-
-def test_upsert_curve_human_approval_bypasses_automatic_gate():
+def test_upsert_curve_dry_run_validated():
     hass = FakeHass()
     _make_bot(hass)
     _async_register_services(hass)
 
     result = _run(_call(hass, SERVICE_UPSERT_VISION_SPREAD_CURVE, {
         "config_entry_id": "entry-1", "crop_slug": "tomato",
-        "name": "[FarmBot Vision] Tomato", "data": {"0": 10, "20": 40},
-        "apply": False, "human_approved": True,
+        "name": "[FarmBot Vision] Tomato", "data": {"0": 10, "20": 40}, "apply": False,
     }))
     assert result["status"] == "validated"
 
 
-def test_upsert_curve_rejects_monotonic_violation_when_enabled():
+def test_upsert_curve_rejects_monotonic_violation():
     hass = FakeHass()
-    _make_bot(hass, options={"allow_vision_curve_writes": True})
+    _make_bot(hass)
     _async_register_services(hass)
     with pytest.raises(ServiceValidationError):
         _run(_call(hass, SERVICE_UPSERT_VISION_SPREAD_CURVE, {
@@ -782,7 +734,7 @@ def test_upsert_curve_rejects_monotonic_violation_when_enabled():
 
 def test_upsert_curve_rejects_modifying_user_created_curve():
     hass = FakeHass()
-    manager, _ = _make_bot(hass, options={"allow_vision_curve_writes": True})
+    manager, _ = _make_bot(hass)
     manager.api.curves[5] = {"id": 5, "name": "My Tomatoes", "type": "spread", "data": {"0": 10}}
     _async_register_services(hass)
     with pytest.raises(ServiceValidationError):
@@ -794,7 +746,7 @@ def test_upsert_curve_rejects_modifying_user_created_curve():
 
 def test_upsert_curve_rejects_assignment_to_wrong_bot_plant():
     hass = FakeHass()
-    manager, _ = _make_bot(hass, device_id="42", options={"allow_vision_curve_writes": True})
+    manager, _ = _make_bot(hass, device_id="42")
     manager.api.points[9] = _plant_record(9, device_id="99")
     _async_register_services(hass)
     with pytest.raises(ServiceValidationError):
@@ -807,7 +759,7 @@ def test_upsert_curve_rejects_assignment_to_wrong_bot_plant():
 
 def test_upsert_curve_creates_and_assigns_when_valid():
     hass = FakeHass()
-    manager, _ = _make_bot(hass, device_id="42", options={"allow_vision_curve_writes": True})
+    manager, _ = _make_bot(hass, device_id="42")
     manager.api.points[9] = _plant_record(9, spread_curve_id=None)
     _async_register_services(hass)
 
@@ -823,7 +775,7 @@ def test_upsert_curve_creates_and_assigns_when_valid():
 
 def test_upsert_curve_rolls_back_partial_assignment_failure():
     hass = FakeHass()
-    manager, _ = _make_bot(hass, device_id="42", options={"allow_vision_curve_writes": True})
+    manager, _ = _make_bot(hass, device_id="42")
     manager.api.points[9] = _plant_record(9, spread_curve_id=1)
     manager.api.points[10] = _plant_record(10, spread_curve_id=2)
     manager.api.fail_assign_once_for = {10}

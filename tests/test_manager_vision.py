@@ -38,19 +38,14 @@ def test_vision_options_returns_defaults_when_unset():
     options = manager.vision_options()
     assert options["vision_enabled"] is False
     assert options["vision_heartbeat_timeout_minutes"] == 10
-    assert options["allow_automatic_radius_increases"] is False
-    assert options["allow_automatic_plant_removal"] is False
-    assert options["allow_vision_curve_writes"] is False
-    assert options["maximum_plant_radius_mm"] == 500
-    assert options["minimum_automatic_confidence"] == 0.90
 
 
 def test_vision_options_reads_live_from_entry_without_reload():
     hass, manager, entry = _make_manager()
     assert manager.vision_options()["vision_enabled"] is False
-    entry.options = {"vision_enabled": True, "allow_vision_curve_writes": True}
+    entry.options = {"vision_enabled": True, "vision_heartbeat_timeout_minutes": 20}
     assert manager.vision_options()["vision_enabled"] is True
-    assert manager.vision_options()["allow_vision_curve_writes"] is True
+    assert manager.vision_options()["vision_heartbeat_timeout_minutes"] == 20
 
 
 def test_vision_options_without_entry_returns_defaults():

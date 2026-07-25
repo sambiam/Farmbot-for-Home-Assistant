@@ -35,24 +35,19 @@ def test_options_form_defaults_match_documented_defaults():
     defaults = {str(key): key.default() for key in schema_dict}
     assert defaults["vision_enabled"] is False
     assert defaults["vision_heartbeat_timeout_minutes"] == 10
-    assert defaults["allow_automatic_radius_increases"] is False
-    assert defaults["allow_automatic_plant_removal"] is False
-    assert defaults["allow_vision_curve_writes"] is False
-    assert defaults["maximum_plant_radius_mm"] == 500
-    assert defaults["minimum_automatic_confidence"] == 0.90
 
 
 def test_options_form_shows_currently_saved_values_as_defaults():
     entry = ConfigEntry(
         entry_id="e1", unique_id="42", domain="farmbot", data={},
-        options={"vision_enabled": True, "maximum_plant_radius_mm": 250},
+        options={"vision_enabled": True, "vision_heartbeat_timeout_minutes": 20},
     )
     flow = _flow_for(entry)
     result = _run(flow.async_step_init(None))
     schema_dict = result["data_schema"].schema
     defaults = {str(key): key.default() for key in schema_dict}
     assert defaults["vision_enabled"] is True
-    assert defaults["maximum_plant_radius_mm"] == 250
+    assert defaults["vision_heartbeat_timeout_minutes"] == 20
 
 
 def test_options_step_saves_submitted_values():
@@ -61,11 +56,6 @@ def test_options_step_saves_submitted_values():
     submitted = {
         "vision_enabled": True,
         "vision_heartbeat_timeout_minutes": 5,
-        "allow_automatic_radius_increases": False,
-        "allow_automatic_plant_removal": False,
-        "allow_vision_curve_writes": True,
-        "maximum_plant_radius_mm": 300,
-        "minimum_automatic_confidence": 0.95,
     }
     result = _run(flow.async_step_init(submitted))
     assert result == {"type": "create_entry", "title": "", "data": submitted}

@@ -49,21 +49,17 @@ SERVICE_REQUEST_VISION_ANALYSIS = "request_vision_analysis"
 EVENT_VISION_REQUEST = "farmbot_vision_request"
 
 # Integration options (OptionsFlow) - keys and defaults
+#
+# Policy limits (max radius, confidence thresholds, automatic-write
+# permissions) live entirely in the FarmBot Vision app's own settings, which
+# already govern every write this integration is asked to make. The
+# integration only keeps the master enable switch and its own liveness
+# bookkeeping, neither of which the app can own.
 OPTION_VISION_ENABLED = "vision_enabled"
 OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES = "vision_heartbeat_timeout_minutes"
-OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES = "allow_automatic_radius_increases"
-OPTION_ALLOW_AUTOMATIC_PLANT_REMOVAL = "allow_automatic_plant_removal"
-OPTION_ALLOW_VISION_CURVE_WRITES = "allow_vision_curve_writes"
-OPTION_MAXIMUM_PLANT_RADIUS_MM = "maximum_plant_radius_mm"
-OPTION_MINIMUM_AUTOMATIC_CONFIDENCE = "minimum_automatic_confidence"
 
 DEFAULT_VISION_ENABLED = False
 DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES = 10
-DEFAULT_ALLOW_AUTOMATIC_RADIUS_INCREASES = False
-DEFAULT_ALLOW_AUTOMATIC_PLANT_REMOVAL = False
-DEFAULT_ALLOW_VISION_CURVE_WRITES = False
-DEFAULT_MAXIMUM_PLANT_RADIUS_MM = 500
-DEFAULT_MINIMUM_AUTOMATIC_CONFIDENCE = 0.90
 
 # FarmBot point/plant filtering
 POINTER_TYPE_PLANT = "Plant"

@@ -63,11 +63,12 @@ options flow. FarmBot credentials are never asked for again here. Options:
 | --- | --- | --- |
 | `vision_enabled` | off | Enables treating the bridge as active (informational; services are always registered, but enable this once you actually run the companion app) |
 | `vision_heartbeat_timeout_minutes` | 10 | How long since the last `farmbot.report_vision_status` call before "FarmBot Vision Available" turns off |
-| `allow_automatic_radius_increases` | off | Must be on for unattended `farmbot.apply_vision_radius` writes; human-approved radius changes retain all hard safety checks but bypass automatic-only gates |
-| `allow_automatic_plant_removal` | off | Must be on for unattended `farmbot.apply_vision_removal` calls; human-approved removals still retain all validation checks |
-| `allow_vision_curve_writes` | off | Must be on for unattended `farmbot.upsert_vision_spread_curve` writes; human-approved curve edits still require all validation and ownership checks |
-| `maximum_plant_radius_mm` | 500 | Hard ceiling enforced independently of the app's recommendation |
-| `minimum_automatic_confidence` | 0.90 | `farmbot.apply_vision_radius` rejects an `apply: true` write whose `confidence` is below this, even if everything else validates |
+
+Everything else -- whether to write automatically, radius/confidence
+thresholds, curve-write permission -- is configured in the FarmBot Vision
+app itself, which already governs every write it asks this integration to
+make via `apply`/`human_approved`. Keeping those settings in one place (the
+app) avoids the two config surfaces silently disagreeing with each other.
 
 Changing these options takes effect immediately on the next service call —
 no reload of the FarmBot integration entry is required, because the option
@@ -90,8 +91,8 @@ only ever talks to Home Assistant's service/event API.
   (`farmbot.get_vision_image`)
 - Propose a plant-radius change, either as a dry-run or an actual write
   (`farmbot.apply_vision_radius`)
-- Create/update a FarmBot Vision-owned spread curve and assign it to plants,
-  if curve writes are explicitly enabled (`farmbot.upsert_vision_spread_curve`)
+- Create/update a FarmBot Vision-owned spread curve and assign it to plants
+  (`farmbot.upsert_vision_spread_curve`)
 - Report its own status/heartbeat for display on Home Assistant entities
   (`farmbot.report_vision_status`)
 - Automatically fire a targeted `farmbot_vision_request` when a newly uploaded
@@ -100,25 +101,21 @@ only ever talks to Home Assistant's service/event API.
 
 ### Safety model
 
-There are two independent layers:
+Policy -- whether to write automatically, radius/confidence thresholds,
+growth caps, curve-write permission -- lives entirely in the FarmBot Vision
+app's own settings. The app decides both *whether* to recommend a change and
+*whether* to apply it (`apply`/`human_approved`); this integration trusts
+that decision.
 
-1. The FarmBot Vision app decides whether it *recommends* a change.
-2. This integration independently re-validates whether the change is
-   *permitted* -- re-fetching the plant/curve from FarmBot itself and
-   never trusting a caller-supplied "current" value, unit, plant ID, or
-   confidence score at face value.
-
-Consequences of that:
+What the integration still does independently, regardless of app settings,
+is re-verify plant/curve *identity and freshness* against FarmBot itself --
+never trusting a caller-supplied "current" value, unit or plant ID at face
+value:
 
 - A stale `expected_current_radius_mm` (someone else already changed the
   plant) is rejected as a `conflict`, not silently overwritten.
-- Automatic radius **shrinking** is not implemented in this release, full
-  stop -- it is rejected regardless of options.
-- Automatic radius **increases** require `allow_automatic_radius_increases`,
-  and the reported `confidence` must meet `minimum_automatic_confidence`.
-- Curve writes require `allow_vision_curve_writes`, and only curves whose
-  name starts with `[FarmBot Vision]` can ever be modified -- a
-  user-created curve is never touched.
+- Only curves whose name starts with `[FarmBot Vision]` can ever be
+  modified -- a user-created curve is never touched.
 - Every plant/curve write is re-checked against the FarmBot device_id of
   the config entry the call was made against; a plant belonging to a
   different bot is always rejected.

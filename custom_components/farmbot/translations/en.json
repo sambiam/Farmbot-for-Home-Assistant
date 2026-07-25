@@ -29,12 +29,7 @@
         "description": "These options control the optional bridge to a separate FarmBot Vision app. FarmBot credentials are never re-entered here.",
         "data": {
           "vision_enabled": "Enable FarmBot Vision bridge",
-          "vision_heartbeat_timeout_minutes": "Vision heartbeat timeout (minutes)",
-          "allow_automatic_radius_increases": "Allow automatic plant-radius increases",
-          "allow_automatic_plant_removal": "Allow automatic plant removal",
-          "allow_vision_curve_writes": "Allow FarmBot Vision to create/update spread curves",
-          "maximum_plant_radius_mm": "Maximum allowed plant radius (mm)",
-          "minimum_automatic_confidence": "Minimum confidence for automatic changes"
+          "vision_heartbeat_timeout_minutes": "Vision heartbeat timeout (minutes)"
         }
       }
     }
@@ -127,7 +122,7 @@
     },
     "apply_vision_radius": {
       "name": "Apply Vision radius",
-      "description": "Validate (and optionally apply) a FarmBot Vision plant-radius recommendation. The integration independently re-verifies the plant, current radius and limits before writing anything.",
+      "description": "Validate (and optionally apply) a FarmBot Vision plant-radius recommendation. The integration independently re-verifies plant identity and that the current radius matches expectations before writing anything; radius limits and confidence thresholds are the FarmBot Vision app's responsibility.",
       "fields": {
         "config_entry_id": {
           "name": "FarmBot",
@@ -155,11 +150,11 @@
         },
         "apply": {
           "name": "Apply",
-          "description": "If off (default), only validates and returns a dry-run result. If on, applies the change when allowed by integration options."
+          "description": "If off (default), only validates and returns a dry-run result. If on, applies the change."
         },
         "human_approved": {
           "name": "Human approved",
-          "description": "Marks this as a deliberate human approval. It bypasses automatic-write gates but never validation and safety checks."
+          "description": "Marks this as a deliberate human approval, for logging. It never bypasses validation and safety checks."
         }
       }
     },
@@ -193,13 +188,13 @@
         },
         "human_approved": {
           "name": "Human approved",
-          "description": "Marks this as a deliberate human approval. It bypasses the automatic-removal option but not validation."
+          "description": "Marks this as a deliberate human approval, for logging. It never bypasses validation."
         }
       }
     },
     "upsert_vision_spread_curve": {
       "name": "Upsert Vision spread curve",
-      "description": "Create or update a FarmBot Vision-owned spread curve and optionally assign it to plants. Disabled by default; enable curve writes in the integration options first.",
+      "description": "Create or update a FarmBot Vision-owned spread curve and optionally assign it to plants.",
       "fields": {
         "config_entry_id": {
           "name": "FarmBot",
@@ -231,7 +226,7 @@
         },
         "human_approved": {
           "name": "Human approved",
-          "description": "Marks this as a deliberate human approval. It bypasses the automatic curve-write option but not validation or ownership checks."
+          "description": "Marks this as a deliberate human approval, for logging. It never bypasses validation or ownership checks."
         }
       }
     },
@@ -327,9 +322,6 @@
     },
     "vision_unexpected_error": {
       "message": "The FarmBot Vision request failed unexpectedly. See the Home Assistant log for details."
-    },
-    "vision_curve_writes_disabled": {
-      "message": "FarmBot Vision curve writes are disabled in the integration options."
     },
     "vision_curve_invalid": {
       "message": "Spread curve request was rejected: {reason}."

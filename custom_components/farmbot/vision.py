@@ -473,14 +473,15 @@ def validate_radius_change(
     device_id: Any,
     expected_current_radius_mm: Any,
     recommended_radius_mm: Any,
-    allow_automatic_shrink: bool,
-    maximum_plant_radius_mm: float,
 ) -> ValidationResult:
     """Independently re-validate a proposed plant-radius change.
 
     Never trusts the caller's claimed current radius, plant identity or
     units: the point is re-checked fresh against what FarmBot itself
-    reports for it.
+    reports for it. Policy limits (maximum radius, confidence thresholds,
+    whether an automatic shrink is allowed) are the FarmBot Vision app's
+    responsibility -- it already governs every write it proposes via its
+    own settings before this is ever called.
     """
     if point is None:
         return ValidationResult(False, "plant_not_found")
@@ -497,18 +498,12 @@ def validate_radius_change(
     if not _is_finite_positive_number(recommended_radius_mm):
         return ValidationResult(False, "invalid_recommended_radius_mm")
 
-    if recommended_radius_mm > maximum_plant_radius_mm:
-        return ValidationResult(False, "radius_exceeds_maximum")
-
     actual_radius = point.get("radius")
     if not isinstance(actual_radius, (int, float)) or isinstance(actual_radius, bool):
         return ValidationResult(False, "current_radius_unknown")
 
     if abs(actual_radius - expected_current_radius_mm) > RADIUS_TOLERANCE_MM:
         return ValidationResult(False, "stale_radius")
-
-    if recommended_radius_mm < actual_radius and not allow_automatic_shrink:
-        return ValidationResult(False, "shrink_not_allowed")
 
     return ValidationResult(True, None)
 

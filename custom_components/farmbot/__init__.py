@@ -26,11 +26,6 @@ from .const import (
     EVENT_VISION_REQUEST,
     MAX_IMAGE_DIMENSION,
     MAX_IMAGE_LOOKBACK_HOURS,
-    OPTION_ALLOW_AUTOMATIC_PLANT_REMOVAL,
-    OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES,
-    OPTION_ALLOW_VISION_CURVE_WRITES,
-    OPTION_MAXIMUM_PLANT_RADIUS_MM,
-    OPTION_MINIMUM_AUTOMATIC_CONFIDENCE,
     SERVICE_APPLY_VISION_PLANT_CENTER,
     SERVICE_APPLY_VISION_RADIUS,
     SERVICE_APPLY_VISION_REMOVAL,
@@ -314,10 +309,8 @@ _RADIUS_REJECTION_MESSAGES = {
         "expected_current_radius_mm is not a valid positive number"
     ),
     "invalid_recommended_radius_mm": "recommended_radius_mm is not a valid positive number",
-    "radius_exceeds_maximum": "Recommended radius exceeds the configured maximum",
     "current_radius_unknown": "FarmBot has no numeric radius recorded for this plant",
     "stale_radius": "Current FarmBot radius does not match expected_current_radius_mm",
-    "shrink_not_allowed": "Automatic radius shrink is not supported",
 }
 
 
@@ -509,14 +502,12 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
     async def apply_vision_radius(call: ServiceCall) -> dict:
         manager = _get_manager(hass, call.data["config_entry_id"])
-        options = manager.vision_options()
         plant_id = call.data["plant_id"]
         measurement_id = call.data["measurement_id"]
         expected = call.data["expected_current_radius_mm"]
         recommended = call.data["recommended_radius_mm"]
         confidence = call.data["confidence"]
         apply = call.data["apply"]
-        human_approved = call.data["human_approved"]
 
         _LOGGER.info(
             "FarmBot Vision radius proposal: bot=%s plant=%s measurement=%s "
@@ -533,8 +524,6 @@ def _async_register_services(hass: HomeAssistant) -> None:
             device_id=manager.device_id,
             expected_current_radius_mm=expected,
             recommended_radius_mm=recommended,
-            allow_automatic_shrink=False,  # shrinking is never implemented in this release
-            maximum_plant_radius_mm=options[OPTION_MAXIMUM_PLANT_RADIUS_MM],
         )
         actual_radius = point.get("radius") if isinstance(point, dict) else None
 
@@ -562,26 +551,6 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 "old_radius_mm": actual_radius,
                 "new_radius_mm": recommended,
                 "message": "Validated; dry run, no write performed",
-            }
-
-        if not human_approved and not options[OPTION_ALLOW_AUTOMATIC_RADIUS_INCREASES]:
-            return {
-                "status": "rejected",
-                "plant_id": plant_id,
-                "measurement_id": measurement_id,
-                "old_radius_mm": actual_radius,
-                "new_radius_mm": recommended,
-                "message": "Automatic radius application is disabled in integration options",
-            }
-
-        if not human_approved and confidence < options[OPTION_MINIMUM_AUTOMATIC_CONFIDENCE]:
-            return {
-                "status": "rejected",
-                "plant_id": plant_id,
-                "measurement_id": measurement_id,
-                "old_radius_mm": actual_radius,
-                "new_radius_mm": recommended,
-                "message": "Confidence is below the configured minimum for automatic changes",
             }
 
         await _safe_api_call(
@@ -632,12 +601,10 @@ def _async_register_services(hass: HomeAssistant) -> None:
     async def apply_vision_removal(call: ServiceCall) -> dict:
         """Validate then reversibly archive a vision-confirmed missing plant."""
         manager = _get_manager(hass, call.data["config_entry_id"])
-        options = manager.vision_options()
         plant_id = call.data["plant_id"]
         measurement_id = call.data["measurement_id"]
         expected = call.data["expected_current_radius_mm"]
         apply = call.data["apply"]
-        human_approved = call.data["human_approved"]
 
         point = await _safe_api_call(
             manager, manager.api.async_get_point(plant_id), context="fetch plant"
@@ -666,15 +633,6 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 "measurement_id": measurement_id,
                 "old_radius_mm": actual_radius,
                 "message": "Validated; dry run, no write performed",
-            }
-
-        if not human_approved and not options[OPTION_ALLOW_AUTOMATIC_PLANT_REMOVAL]:
-            return {
-                "status": "rejected",
-                "plant_id": plant_id,
-                "measurement_id": measurement_id,
-                "old_radius_mm": actual_radius,
-                "message": "Automatic plant removal is disabled in integration options",
             }
 
         await _safe_api_call(
@@ -731,15 +689,6 @@ def _async_register_services(hass: HomeAssistant) -> None:
         manager = _get_manager(hass, call.data["config_entry_id"])
         if not call.data["apply"]:
             return {"status": "validated", "message": "Validated; no write performed"}
-        if (
-            not call.data["human_approved"]
-            and call.data["confidence"]
-            < manager.vision_options()[OPTION_MINIMUM_AUTOMATIC_CONFIDENCE]
-        ):
-            return {
-                "status": "rejected",
-                "message": "Confidence is below the configured automatic threshold",
-            }
         created = await _safe_api_call(
             manager,
             manager.api.async_create_weed(
@@ -760,12 +709,6 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
     async def upsert_vision_spread_curve(call: ServiceCall) -> dict:
         manager = _get_manager(hass, call.data["config_entry_id"])
-        options = manager.vision_options()
-        if not call.data["human_approved"] and not options[OPTION_ALLOW_VISION_CURVE_WRITES]:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN, translation_key="vision_curve_writes_disabled"
-            )
-
         crop_slug = call.data["crop_slug"]
         curve_id = call.data.get("curve_id")
         name = call.data["name"]
