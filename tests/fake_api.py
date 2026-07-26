@@ -118,6 +118,12 @@ class FakeVisionApi:
             self.points[point_id]["z"] = z
         return self.points.get(point_id, {})
 
+    async def async_patch_soil_point(self, point_id, *, x, y, z):
+        self._record("async_patch_soil_point")
+        if point_id in self.points:
+            self.points[point_id].update({"x": x, "y": y, "z": z})
+        return self.points.get(point_id, {})
+
     async def async_create_weed(self, *, name, x, y, z, radius):
         self._record("async_create_weed")
         point = {

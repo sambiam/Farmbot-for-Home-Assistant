@@ -3,6 +3,16 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.8.0 - 2026-07-26
+
+- **Added:** Soil captures can target an explicitly calculated clear-soil X/Y
+  location less than 200 mm from the existing soil-height point.
+- **Safety:** Relocation is allowed only for points last updated more than 14
+  days ago. Capture and apply revalidate age, distance, axis bounds, identity
+  and the point's update timestamp.
+- **Data integrity:** Human-approved results relocate the existing
+  GenericPointer and update its Z while preserving its soil metadata.
+
 ## 1.7.0 - 2026-07-26
 
 - **Added:** Typed FarmBot Vision soil-point inventory, acknowledged virtual-stereo

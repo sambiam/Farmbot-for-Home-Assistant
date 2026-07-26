@@ -270,10 +270,11 @@ which coordinate system a calibration belongs to.
 
 ### Minimum FarmBot Vision app version
 
-The soil-height bridge requires integration version **1.7.0**. It adds the
-four typed soil services and FarmBot RPC acknowledgement handling while
-retaining the existing image contract. Earlier app features remain compatible
-with older integrations.
+Clear-site soil-height measurement requires integration version **1.8.0**.
+It extends the four typed soil services with stale-point timestamp checks and
+reviewed X/Y relocation (strictly less than 200 mm) while retaining FarmBot RPC
+acknowledgement handling and the existing image contract. Earlier app features
+remain compatible with older integrations.
 
 The `1.2.0` `get_vision_image` response added
 `source_sha256`, `source_width`/`source_height`, `oriented_width`/
@@ -286,7 +287,7 @@ have) rather than the original download; an app that verified `sha256`
 against the base64 payload now succeeds where it previously would have
 mismatched. A companion app that consumes the new fields should declare a
 minimum required integration version of **1.2.0**; soil-height acquisition
-requires **1.7.0**.
+requires **1.8.0** for clear-site relocation.
 
 ## License
 

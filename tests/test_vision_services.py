@@ -497,7 +497,7 @@ def _soil_point(point_id=70, **changes):
         "x": 100.0,
         "y": 200.0,
         "z": -300.0,
-        "updated_at": "2026-07-26T00:00:00Z",
+        "updated_at": "2026-07-01T00:00:00Z",
         "discarded_at": None,
         "meta": {
             "created_by": "measure-soil-height",
@@ -557,6 +557,8 @@ def test_start_and_get_soil_capture_are_typed_and_asynchronous():
             {
                 "config_entry_id": "entry-1",
                 "point_id": 70,
+                "capture_x": 125,
+                "capture_y": 225,
                 "capture_z": 0,
                 "baseline_mm": 15,
                 "z_offsets_mm": [0, 25, 50],
@@ -565,6 +567,8 @@ def test_start_and_get_soil_capture_are_typed_and_asynchronous():
     )
     assert started["capture_id"] == capture_id
     assert calls[0]["z_offsets_mm"] == [0.0, 25.0, 50.0]
+    assert calls[0]["point"]["x"] == 125.0
+    assert calls[0]["point"]["y"] == 225.0
     polled = _run(
         _call(
             hass,
@@ -587,6 +591,9 @@ def test_apply_soil_height_requires_approval_and_detects_stale_point():
         "expected_x": 100,
         "expected_y": 200,
         "expected_z": -300,
+        "expected_updated_at": "2026-07-01T00:00:00Z",
+        "recommended_x": 125,
+        "recommended_y": 225,
         "recommended_z_mm": -287,
         "confidence": 0.91,
         "apply": True,
@@ -603,6 +610,8 @@ def test_apply_soil_height_requires_approval_and_detects_stale_point():
         )
     )
     assert applied["status"] == "applied"
+    assert manager.api.points[70]["x"] == 125
+    assert manager.api.points[70]["y"] == 225
     assert manager.api.points[70]["z"] == -287
     assert manager.api.points[70]["meta"]["created_by"] == "measure-soil-height"
 
@@ -614,6 +623,73 @@ def test_apply_soil_height_requires_approval_and_detects_stale_point():
         )
     )
     assert conflict["status"] == "conflict"
+
+
+def test_soil_relocation_requires_stale_point_and_less_than_200_mm():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    manager.api.points[70] = _soil_point(updated_at="2999-01-01T00:00:00Z")
+    manager.start_soil_capture = lambda **kwargs: str(uuid.uuid4())
+    _async_register_services(hass)
+
+    fresh = _run(
+        _call(
+            hass,
+            SERVICE_START_VISION_SOIL_CAPTURE,
+            {
+                "config_entry_id": "entry-1",
+                "point_id": 70,
+                "capture_x": 101,
+                "capture_y": 200,
+            },
+        )
+    )
+    assert fresh["status"] == "rejected"
+
+    manager.api.points[70]["updated_at"] = "2026-07-01T00:00:00Z"
+    too_far = _run(
+        _call(
+            hass,
+            SERVICE_START_VISION_SOIL_CAPTURE,
+            {
+                "config_entry_id": "entry-1",
+                "point_id": 70,
+                "capture_x": 300,
+                "capture_y": 200,
+            },
+        )
+    )
+    assert too_far["status"] == "rejected"
+
+
+def test_apply_soil_relocation_rechecks_age_and_update_timestamp():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    manager.api.points[70] = _soil_point(updated_at="2999-01-01T00:00:00Z")
+    _async_register_services(hass)
+    payload = {
+        "config_entry_id": "entry-1",
+        "point_id": 70,
+        "measurement_id": str(uuid.uuid4()),
+        "expected_x": 100,
+        "expected_y": 200,
+        "expected_z": -300,
+        "expected_updated_at": "2999-01-01T00:00:00Z",
+        "recommended_x": 125,
+        "recommended_y": 225,
+        "recommended_z_mm": -287,
+        "confidence": 0.91,
+        "apply": True,
+        "human_approved": True,
+    }
+
+    fresh = _run(_call(hass, SERVICE_APPLY_VISION_SOIL_HEIGHT, payload))
+    assert fresh["status"] == "rejected"
+
+    manager.api.points[70]["updated_at"] = "2026-07-01T00:00:00Z"
+    changed = _run(_call(hass, SERVICE_APPLY_VISION_SOIL_HEIGHT, payload))
+    assert changed["status"] == "conflict"
+    assert "async_patch_soil_point" not in manager.api.calls
 
 
 # --------------------------- apply_vision_radius ---------------------------

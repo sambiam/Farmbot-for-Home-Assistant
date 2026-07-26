@@ -5,7 +5,7 @@ import functools
 import logging
 import math
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import homeassistant.helpers.config_validation as cv
@@ -28,6 +28,7 @@ from .const import (
     MAX_IMAGE_DIMENSION,
     MAX_IMAGE_LOOKBACK_HOURS,
     MAX_SOIL_BASELINE_MM,
+    MAX_SOIL_RELOCATION_MM,
     MAX_SOIL_Z_OFFSET_MM,
     MIN_SOIL_BASELINE_MM,
     SERVICE_APPLY_VISION_PLANT_CENTER,
@@ -48,6 +49,7 @@ from .const import (
     SERVICE_START_VISION_SOIL_CAPTURE,
     SERVICE_UPDATE_VISION_WEED_RADIUS,
     SERVICE_UPSERT_VISION_SPREAD_CURVE,
+    SOIL_POINT_STALE_DAYS,
     TOKEN_REFRESH_INTERVAL,
     VISION_ANALYSIS_MODES,
     VISION_CURVE_TYPE,
@@ -152,6 +154,8 @@ SERVICE_START_VISION_SOIL_CAPTURE_SCHEMA = vol.Schema(
     {
         vol.Required("config_entry_id"): cv.string,
         vol.Required("point_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Optional("capture_x"): vol.Coerce(float),
+        vol.Optional("capture_y"): vol.Coerce(float),
         vol.Optional("capture_z", default=0): vol.Coerce(float),
         vol.Optional("baseline_mm", default=15): vol.All(
             vol.Coerce(float),
@@ -179,6 +183,9 @@ SERVICE_APPLY_VISION_SOIL_HEIGHT_SCHEMA = vol.Schema(
         vol.Required("expected_x"): vol.Coerce(float),
         vol.Required("expected_y"): vol.Coerce(float),
         vol.Required("expected_z"): vol.Coerce(float),
+        vol.Required("expected_updated_at"): cv.string,
+        vol.Required("recommended_x"): vol.Coerce(float),
+        vol.Required("recommended_y"): vol.Coerce(float),
         vol.Required("recommended_z_mm"): vol.Coerce(float),
         vol.Required("confidence"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
         vol.Optional("apply", default=False): cv.boolean,
@@ -618,6 +625,21 @@ def _async_register_services(hass: HomeAssistant) -> None:
             "motion": manager.soil_motion_state(firmware),
         }
 
+    def _soil_updated_at(point: dict) -> datetime | None:
+        value = dt_util.parse_datetime(str(point.get("updated_at") or ""))
+        if value is None:
+            return None
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    def _soil_point_is_stale(point: dict) -> bool:
+        updated = _soil_updated_at(point)
+        return bool(
+            updated is not None
+            and updated
+            < dt_util.utcnow().astimezone(UTC)
+            - timedelta(days=SOIL_POINT_STALE_DAYS)
+        )
+
     async def start_vision_soil_capture(call: ServiceCall) -> dict:
         manager = _get_manager(hass, call.data["config_entry_id"])
         point = await _safe_api_call(
@@ -636,12 +658,34 @@ def _async_register_services(hass: HomeAssistant) -> None:
             manager.api.async_get_firmware_config(),
             context="fetch motion configuration",
         )
+        has_x = "capture_x" in call.data
+        has_y = "capture_y" in call.data
+        if has_x != has_y:
+            return {
+                "status": "rejected",
+                "message": "Capture X and Y must be supplied together",
+            }
+        capture_x = float(call.data["capture_x"]) if has_x else float(point["x"])
+        capture_y = float(call.data["capture_y"]) if has_y else float(point["y"])
+        relocation = math.hypot(
+            capture_x - float(point["x"]), capture_y - float(point["y"])
+        )
+        if relocation >= MAX_SOIL_RELOCATION_MM:
+            return {
+                "status": "rejected",
+                "message": "Clear-soil capture must be less than 200 mm from the point",
+            }
+        if relocation > 0.5 and not _soil_point_is_stale(point):
+            return {
+                "status": "rejected",
+                "message": "Only soil points older than 14 days may be relocated",
+            }
         values = [
             call.data["capture_z"],
             call.data["baseline_mm"],
             *call.data["z_offsets_mm"],
-            point.get("x"),
-            point.get("y"),
+            capture_x,
+            capture_y,
             point.get("z"),
         ]
         try:
@@ -657,8 +701,9 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 "message": "Z offsets must be unique and in ascending order",
             }
         try:
+            capture_point = {**point, "x": capture_x, "y": capture_y}
             capture_id = manager.start_soil_capture(
-                point=point,
+                point=capture_point,
                 firmware_config=firmware,
                 capture_z=float(call.data["capture_z"]),
                 baseline_mm=float(call.data["baseline_mm"]),
@@ -680,7 +725,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         return capture
 
     async def apply_vision_soil_height(call: ServiceCall) -> dict:
-        """Patch only Z after identity, ownership, staleness and approval checks."""
+        """Relocate a stale soil point after concurrency and approval checks."""
         manager = _get_manager(hass, call.data["config_entry_id"])
         point = await _safe_api_call(
             manager,
@@ -697,6 +742,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
             call.data["expected_x"],
             call.data["expected_y"],
             call.data["expected_z"],
+            call.data["recommended_x"],
+            call.data["recommended_y"],
             call.data["recommended_z_mm"],
         ]
         if not all(math.isfinite(float(value)) for value in requested):
@@ -714,23 +761,63 @@ def _async_register_services(hass: HomeAssistant) -> None:
             for axis in ("x", "y", "z")
         ):
             return {"status": "conflict", "message": "Soil point coordinates changed"}
+        actual_updated = _soil_updated_at(point)
+        expected_updated = dt_util.parse_datetime(call.data["expected_updated_at"])
+        if expected_updated is not None and expected_updated.tzinfo is None:
+            expected_updated = expected_updated.replace(tzinfo=UTC)
+        if actual_updated is None or expected_updated is None:
+            return {"status": "rejected", "message": "Soil point update date is unavailable"}
+        if abs((actual_updated - expected_updated.astimezone(UTC)).total_seconds()) > 1:
+            return {"status": "conflict", "message": "Soil point was updated after planning"}
+        if not _soil_point_is_stale(point):
+            return {
+                "status": "rejected",
+                "message": "Only soil points older than 14 days may be replaced",
+            }
         firmware = await _safe_api_call(
             manager,
             manager.api.async_get_firmware_config(),
             context="fetch motion configuration",
         )
-        z_bounds = manager.soil_motion_state(firmware)["axis_bounds"]["z"]
+        bounds = manager.soil_motion_state(firmware)["axis_bounds"]
+        recommended_x = float(call.data["recommended_x"])
+        recommended_y = float(call.data["recommended_y"])
         recommended = float(call.data["recommended_z_mm"])
-        if z_bounds is None or not z_bounds[0] <= recommended <= z_bounds[1]:
-            return {"status": "rejected", "message": "Recommended soil Z is outside FarmBot bounds"}
+        if (
+            math.hypot(
+                recommended_x - actual_coordinates["x"],
+                recommended_y - actual_coordinates["y"],
+            )
+            >= MAX_SOIL_RELOCATION_MM
+        ):
+            return {
+                "status": "rejected",
+                "message": "Replacement must be less than 200 mm from the stale point",
+            }
+        for axis, value in (
+            ("x", recommended_x),
+            ("y", recommended_y),
+            ("z", recommended),
+        ):
+            axis_bounds = bounds[axis]
+            if axis_bounds is None or not axis_bounds[0] <= value <= axis_bounds[1]:
+                return {
+                    "status": "rejected",
+                    "message": f"Recommended soil {axis.upper()} is outside FarmBot bounds",
+                }
         if not call.data["apply"]:
             return {"status": "validated", "message": "Validated; no write performed"}
         if not call.data["human_approved"]:
             return {"status": "rejected", "message": "Human approval is required"}
         await _safe_api_call(
             manager,
-            manager.api.async_patch_soil_height(call.data["point_id"], recommended),
-            context="update soil height",
+            manager.api.async_patch_soil_point(
+                call.data["point_id"],
+                x=recommended_x,
+                y=recommended_y,
+                z=recommended,
+            ),
+            context="relocate soil point",
         )
         updated = await _safe_api_call(
             manager,
@@ -740,17 +827,26 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if not manager.is_soil_height_point(updated):
             return {"status": "conflict", "message": "FarmBot soil point changed during update"}
         try:
-            actual = float(updated["z"])
+            persisted = {axis: float(updated[axis]) for axis in ("x", "y", "z")}
         except (KeyError, TypeError, ValueError):
-            return {"status": "conflict", "message": "FarmBot returned an invalid soil height"}
-        if not math.isfinite(actual) or abs(actual - recommended) > 0.5:
-            return {"status": "conflict", "message": "FarmBot did not persist the soil height"}
+            return {"status": "conflict", "message": "FarmBot returned invalid soil coordinates"}
+        expected_persisted = {"x": recommended_x, "y": recommended_y, "z": recommended}
+        if any(
+            not math.isfinite(persisted[axis])
+            or abs(persisted[axis] - expected_persisted[axis]) > 0.5
+            for axis in ("x", "y", "z")
+        ):
+            return {"status": "conflict", "message": "FarmBot did not persist the soil point"}
         return {
             "status": "applied",
             "point_id": call.data["point_id"],
+            "old_x": float(point["x"]),
+            "old_y": float(point["y"]),
             "old_z_mm": float(point["z"]),
-            "z_mm": actual,
-            "message": "Soil height updated",
+            "x": persisted["x"],
+            "y": persisted["y"],
+            "z_mm": persisted["z"],
+            "message": "Stale soil point replaced with the clear-soil measurement",
         }
 
     async def apply_vision_radius(call: ServiceCall) -> dict:

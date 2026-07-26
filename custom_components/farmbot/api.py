@@ -324,6 +324,18 @@ class FarmbotApiClient:
         )
         return data if isinstance(data, dict) else {}
 
+    async def async_patch_soil_point(
+        self, point_id: int, *, x: float, y: float, z: float
+    ) -> dict:
+        """Relocate an existing soil point and update its measured height."""
+        data = await self._request_json(
+            "PATCH",
+            f"/points/{int(point_id)}",
+            json_body={"x": x, "y": y, "z": z},
+            idempotent=False,
+        )
+        return data if isinstance(data, dict) else {}
+
     async def async_create_weed(
         self, *, name: str, x: float, y: float, z: float, radius: float
     ) -> dict:

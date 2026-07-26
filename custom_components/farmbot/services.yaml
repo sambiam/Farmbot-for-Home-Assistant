@@ -118,6 +118,16 @@ start_vision_soil_capture:
         number:
           min: 1
           mode: box
+    capture_x:
+      selector:
+        number:
+          mode: box
+          step: any
+    capture_y:
+      selector:
+        number:
+          mode: box
+          step: any
     capture_z:
       required: true
       selector:
@@ -179,6 +189,22 @@ apply_vision_soil_height:
           mode: box
           step: any
     expected_z:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    expected_updated_at:
+      required: true
+      selector:
+        text:
+    recommended_x:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    recommended_y:
       required: true
       selector:
         number:

@@ -142,6 +142,14 @@
           "name": "Soil point ID",
           "description": "ID of a recognized FarmBot soil-height GenericPointer."
         },
+        "capture_x": {
+          "name": "Clear-soil X",
+          "description": "Optional clear-soil capture X, less than 200 mm from a soil point older than 14 days."
+        },
+        "capture_y": {
+          "name": "Clear-soil Y",
+          "description": "Optional clear-soil capture Y, supplied together with clear-soil X."
+        },
         "capture_z": {
           "name": "Capture Z",
           "description": "Camera Z coordinate for the lateral image triplet."
@@ -172,7 +180,7 @@
     },
     "apply_vision_soil_height": {
       "name": "Apply Vision soil height",
-      "description": "Revalidate a recognized soil point and, after explicit human approval, patch only its Z coordinate.",
+      "description": "Revalidate and replace a stale soil point with a reviewed clear-soil X, Y and Z measurement.",
       "fields": {
         "config_entry_id": {
           "name": "FarmBot",
@@ -197,6 +205,18 @@
         "expected_z": {
           "name": "Expected Z",
           "description": "Point Z recorded before measurement."
+        },
+        "expected_updated_at": {
+          "name": "Expected update date",
+          "description": "Point update timestamp recorded when the clear site was planned."
+        },
+        "recommended_x": {
+          "name": "Recommended X",
+          "description": "Reviewed clear-soil X, less than 200 mm from the stale point."
+        },
+        "recommended_y": {
+          "name": "Recommended Y",
+          "description": "Reviewed clear-soil Y, less than 200 mm from the stale point."
         },
         "recommended_z_mm": {
           "name": "Recommended Z",
