@@ -120,6 +120,102 @@
         }
       }
     },
+    "get_vision_soil_points": {
+      "name": "Get Vision soil points",
+      "description": "Return recognized active soil-height GenericPointers and the FarmBot motion state.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot whose soil points should be returned."
+        }
+      }
+    },
+    "start_vision_soil_capture": {
+      "name": "Start Vision soil capture",
+      "description": "Queue a bounded, acknowledged safe-Z motion job that captures a virtual-stereo soil triplet.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot that should capture the images."
+        },
+        "point_id": {
+          "name": "Soil point ID",
+          "description": "ID of a recognized FarmBot soil-height GenericPointer."
+        },
+        "capture_z": {
+          "name": "Capture Z",
+          "description": "Camera Z coordinate for the lateral image triplet."
+        },
+        "baseline_mm": {
+          "name": "Baseline",
+          "description": "Lateral separation in millimetres; 15 mm is recommended."
+        },
+        "z_offsets_mm": {
+          "name": "Z offsets",
+          "description": "Use [0] for measurement or [0, 25, 50] for guided calibration."
+        }
+      }
+    },
+    "get_vision_soil_capture": {
+      "name": "Get Vision soil capture",
+      "description": "Return status and completed image frames for a soil capture.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot that owns the capture."
+        },
+        "capture_id": {
+          "name": "Capture ID",
+          "description": "UUID returned by Start Vision soil capture."
+        }
+      }
+    },
+    "apply_vision_soil_height": {
+      "name": "Apply Vision soil height",
+      "description": "Revalidate a recognized soil point and, after explicit human approval, patch only its Z coordinate.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot that owns the soil point."
+        },
+        "point_id": {
+          "name": "Soil point ID",
+          "description": "ID of the existing soil-height GenericPointer."
+        },
+        "measurement_id": {
+          "name": "Measurement ID",
+          "description": "UUID of the reviewed FarmBot Vision result."
+        },
+        "expected_x": {
+          "name": "Expected X",
+          "description": "Point X recorded before measurement."
+        },
+        "expected_y": {
+          "name": "Expected Y",
+          "description": "Point Y recorded before measurement."
+        },
+        "expected_z": {
+          "name": "Expected Z",
+          "description": "Point Z recorded before measurement."
+        },
+        "recommended_z_mm": {
+          "name": "Recommended Z",
+          "description": "Reviewed soil Z in millimetres."
+        },
+        "confidence": {
+          "name": "Confidence",
+          "description": "Stereo result confidence from 0 to 1."
+        },
+        "apply": {
+          "name": "Apply",
+          "description": "If off, perform validation without writing."
+        },
+        "human_approved": {
+          "name": "Human approved",
+          "description": "Must be on for a soil-height write."
+        }
+      }
+    },
     "apply_vision_radius": {
       "name": "Apply Vision radius",
       "description": "Validate (and optionally apply) a FarmBot Vision plant-radius recommendation. The integration independently re-verifies plant identity and that the current radius matches expectations before writing anything; radius limits and confidence thresholds are the FarmBot Vision app's responsibility.",

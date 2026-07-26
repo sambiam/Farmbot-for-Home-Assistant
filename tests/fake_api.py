@@ -12,12 +12,22 @@ class FakeVisionApi:
     """
 
     def __init__(
-        self, *, points=None, images=None, curves=None, calibration=None, reauth_callback=None
+        self, *, points=None, images=None, curves=None, calibration=None,
+        firmware_config=None, reauth_callback=None
     ):
         self.points = {p["id"]: dict(p) for p in (points or [])}
         self.images = {i["id"]: dict(i) for i in (images or [])}
         self.curves = {c["id"]: dict(c) for c in (curves or [])}
         self.calibration = calibration if calibration is not None else {"available": False}
+        self.firmware_config = firmware_config or {
+            "movement_axis_nr_steps_x": 600000,
+            "movement_axis_nr_steps_y": 300000,
+            "movement_axis_nr_steps_z": 120000,
+            "movement_step_per_mm_x": 100,
+            "movement_step_per_mm_y": 100,
+            "movement_step_per_mm_z": 100,
+            "movement_home_up_z": 1,
+        }
         self.calls: list[str] = []
         self.download_bytes = b""
         self.download_content_type = "image/jpeg"
@@ -47,6 +57,18 @@ class FakeVisionApi:
     async def async_get_images(self):
         self._record("async_get_images")
         return list(self.images.values())
+
+    async def async_get_points(self, *, pointer_type=None):
+        self._record("async_get_points")
+        points = list(self.points.values())
+        return [
+            point for point in points
+            if pointer_type is None or point.get("pointer_type") == pointer_type
+        ]
+
+    async def async_get_firmware_config(self):
+        self._record("async_get_firmware_config")
+        return self.firmware_config
 
     async def async_get_curves(self):
         self._record("async_get_curves")
@@ -90,6 +112,12 @@ class FakeVisionApi:
             self.points[point_id].update({"x": x, "y": y})
         return self.points.get(point_id, {})
 
+    async def async_patch_soil_height(self, point_id, z):
+        self._record("async_patch_soil_height")
+        if point_id in self.points:
+            self.points[point_id]["z"] = z
+        return self.points.get(point_id, {})
+
     async def async_create_weed(self, *, name, x, y, z, radius):
         self._record("async_create_weed")
         point = {
@@ -104,6 +132,16 @@ class FakeVisionApi:
         self.next_point_id += 1
         self.points[point["id"]] = point
         return point
+
+    async def async_patch_weed_radius(self, point_id, radius_mm):
+        self._record("async_patch_weed_radius")
+        if point_id in self.points:
+            self.points[point_id]["radius"] = radius_mm
+        return self.points.get(point_id, {})
+
+    async def async_remove_weed(self, point_id):
+        self._record("async_remove_weed")
+        return self.points.pop(point_id, {})
 
     async def async_create_curve(self, *, name, type_, data):
         self._record("async_create_curve")

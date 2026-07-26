@@ -3,6 +3,22 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.7.0 - 2026-07-26
+
+- **Added:** Typed FarmBot Vision soil-point inventory, acknowledged virtual-stereo
+  capture, capture-status, and human-approved soil-height update services.
+- **Safety:** Soil captures validate connection, emergency-stop, busy state, axis
+  bounds and edge baselines, then use safe-Z movement and restore the starting
+  position when possible. RPC and processed-image timeouts fail closed.
+- **Data integrity:** Soil-height updates re-fetch the existing GenericPointer,
+  verify recognized soil metadata and unchanged coordinates, and patch only Z.
+
+## 1.6.0 - 2026-07-26
+
+- **Added:** Vision services for increasing an existing Weed point's radius
+  with stale-value protection and for removing a known Weed point after the
+  companion app confirms its disappearance.
+
 ## 1.5.0 - Vision policy config moves to the app
 
 ### Removed

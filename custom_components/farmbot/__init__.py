@@ -3,6 +3,7 @@ import asyncio
 import base64
 import functools
 import logging
+import math
 import uuid
 from datetime import timedelta
 from typing import Any
@@ -26,17 +27,26 @@ from .const import (
     EVENT_VISION_REQUEST,
     MAX_IMAGE_DIMENSION,
     MAX_IMAGE_LOOKBACK_HOURS,
+    MAX_SOIL_BASELINE_MM,
+    MAX_SOIL_Z_OFFSET_MM,
+    MIN_SOIL_BASELINE_MM,
     SERVICE_APPLY_VISION_PLANT_CENTER,
     SERVICE_APPLY_VISION_RADIUS,
     SERVICE_APPLY_VISION_REMOVAL,
+    SERVICE_APPLY_VISION_SOIL_HEIGHT,
     SERVICE_CREATE_VISION_WEED,
     SERVICE_EXECUTE_SEQUENCE,
     SERVICE_GET_VISION_IMAGE,
     SERVICE_GET_VISION_INVENTORY,
+    SERVICE_GET_VISION_SOIL_CAPTURE,
+    SERVICE_GET_VISION_SOIL_POINTS,
     SERVICE_LIST_VISION_BOTS,
     SERVICE_MOVE_TO,
+    SERVICE_REMOVE_VISION_WEED,
     SERVICE_REPORT_VISION_STATUS,
     SERVICE_REQUEST_VISION_ANALYSIS,
+    SERVICE_START_VISION_SOIL_CAPTURE,
+    SERVICE_UPDATE_VISION_WEED_RADIUS,
     SERVICE_UPSERT_VISION_SPREAD_CURVE,
     TOKEN_REFRESH_INTERVAL,
     VISION_ANALYSIS_MODES,
@@ -134,6 +144,48 @@ SERVICE_GET_VISION_IMAGE_SCHEMA = vol.Schema(
     }
 )
 
+SERVICE_GET_VISION_SOIL_POINTS_SCHEMA = vol.Schema(
+    {vol.Required("config_entry_id"): cv.string}
+)
+
+SERVICE_START_VISION_SOIL_CAPTURE_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("point_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Optional("capture_z", default=0): vol.Coerce(float),
+        vol.Optional("baseline_mm", default=15): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=MIN_SOIL_BASELINE_MM, max=MAX_SOIL_BASELINE_MM),
+        ),
+        vol.Optional("z_offsets_mm", default=lambda: [0.0]): vol.All(
+            [vol.All(vol.Coerce(float), vol.Range(min=0, max=MAX_SOIL_Z_OFFSET_MM))],
+            vol.Length(min=1, max=3),
+        ),
+    }
+)
+
+SERVICE_GET_VISION_SOIL_CAPTURE_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("capture_id"): _cv_uuid,
+    }
+)
+
+SERVICE_APPLY_VISION_SOIL_HEIGHT_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("point_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Required("measurement_id"): _cv_uuid,
+        vol.Required("expected_x"): vol.Coerce(float),
+        vol.Required("expected_y"): vol.Coerce(float),
+        vol.Required("expected_z"): vol.Coerce(float),
+        vol.Required("recommended_z_mm"): vol.Coerce(float),
+        vol.Required("confidence"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+        vol.Optional("apply", default=False): cv.boolean,
+        vol.Optional("human_approved", default=False): cv.boolean,
+    }
+)
+
 SERVICE_APPLY_VISION_RADIUS_SCHEMA = vol.Schema(
     {
         vol.Required("config_entry_id"): cv.string,
@@ -182,6 +234,30 @@ SERVICE_CREATE_VISION_WEED_SCHEMA = vol.Schema(
         vol.Optional("z", default=0): vol.Coerce(float),
         vol.Required("radius"): vol.All(vol.Coerce(float), vol.Range(min=1, max=250)),
         vol.Optional("name", default="Vision detected weed"): cv.string,
+        vol.Required("confidence"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+        vol.Optional("apply", default=False): cv.boolean,
+        vol.Optional("human_approved", default=False): cv.boolean,
+    }
+)
+
+SERVICE_UPDATE_VISION_WEED_RADIUS_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("weed_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Required("expected_current_radius_mm"): vol.Coerce(float),
+        vol.Required("recommended_radius_mm"): vol.All(
+            vol.Coerce(float), vol.Range(min=1, max=250)
+        ),
+        vol.Required("confidence"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+        vol.Optional("apply", default=False): cv.boolean,
+        vol.Optional("human_approved", default=False): cv.boolean,
+    }
+)
+
+SERVICE_REMOVE_VISION_WEED_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("weed_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
         vol.Required("confidence"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
         vol.Optional("apply", default=False): cv.boolean,
         vol.Optional("human_approved", default=False): cv.boolean,
@@ -500,6 +576,183 @@ def _async_register_services(hass: HomeAssistant) -> None:
         }
         return response
 
+    async def get_vision_soil_points(call: ServiceCall) -> dict:
+        """Return recognized soil points and conservative motion state."""
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        points = await _safe_api_call(
+            manager, manager.api.async_get_points(), context="fetch soil-height points"
+        )
+        firmware = await _safe_api_call(
+            manager,
+            manager.api.async_get_firmware_config(),
+            context="fetch motion configuration",
+        )
+        eligible = []
+        for point in points:
+            if not manager.is_soil_height_point(point):
+                continue
+            if point.get("device_id") is not None and not vision.same_device(
+                point.get("device_id"), manager.device_id
+            ):
+                continue
+            try:
+                coordinates = [float(point[axis]) for axis in ("x", "y", "z")]
+                if not all(math.isfinite(value) for value in coordinates):
+                    continue
+                eligible.append(
+                    {
+                        "id": int(point["id"]),
+                        "name": str(point.get("name") or "Soil Height"),
+                        "x": coordinates[0],
+                        "y": coordinates[1],
+                        "z": coordinates[2],
+                        "updated_at": point.get("updated_at"),
+                    }
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return {
+            "device_id": manager.device_id,
+            "generated_at": dt_util.utcnow().isoformat(),
+            "points": sorted(eligible, key=lambda item: (item["x"], item["y"], item["id"])),
+            "motion": manager.soil_motion_state(firmware),
+        }
+
+    async def start_vision_soil_capture(call: ServiceCall) -> dict:
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        point = await _safe_api_call(
+            manager,
+            manager.api.async_get_point(call.data["point_id"]),
+            context="fetch soil point for capture",
+        )
+        if not manager.is_soil_height_point(point):
+            return {"status": "rejected", "message": "Eligible soil-height point not found"}
+        if point.get("device_id") is not None and not vision.same_device(
+            point.get("device_id"), manager.device_id
+        ):
+            return {"status": "rejected", "message": "Soil point belongs to another FarmBot"}
+        firmware = await _safe_api_call(
+            manager,
+            manager.api.async_get_firmware_config(),
+            context="fetch motion configuration",
+        )
+        values = [
+            call.data["capture_z"],
+            call.data["baseline_mm"],
+            *call.data["z_offsets_mm"],
+            point.get("x"),
+            point.get("y"),
+            point.get("z"),
+        ]
+        try:
+            finite = all(math.isfinite(float(value)) for value in values)
+        except (TypeError, ValueError):
+            finite = False
+        if not finite:
+            return {"status": "rejected", "message": "Capture values must be finite"}
+        z_offsets = [float(value) for value in call.data["z_offsets_mm"]]
+        if z_offsets != sorted(set(z_offsets)):
+            return {
+                "status": "rejected",
+                "message": "Z offsets must be unique and in ascending order",
+            }
+        try:
+            capture_id = manager.start_soil_capture(
+                point=point,
+                firmware_config=firmware,
+                capture_z=float(call.data["capture_z"]),
+                baseline_mm=float(call.data["baseline_mm"]),
+                z_offsets_mm=z_offsets,
+            )
+        except ValueError as err:
+            return {"status": "rejected", "message": str(err)[:240]}
+        return {
+            "status": "queued",
+            "capture_id": capture_id,
+            "message": "Soil capture queued",
+        }
+
+    async def get_vision_soil_capture(call: ServiceCall) -> dict:
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        capture = manager.soil_capture(call.data["capture_id"])
+        if capture is None:
+            return {"status": "failed", "message": "Soil capture was not found", "frames": []}
+        return capture
+
+    async def apply_vision_soil_height(call: ServiceCall) -> dict:
+        """Patch only Z after identity, ownership, staleness and approval checks."""
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        point = await _safe_api_call(
+            manager,
+            manager.api.async_get_point(call.data["point_id"]),
+            context="fetch soil point for height update",
+        )
+        if not manager.is_soil_height_point(point):
+            return {"status": "rejected", "message": "Eligible soil-height point not found"}
+        if point.get("device_id") is not None and not vision.same_device(
+            point.get("device_id"), manager.device_id
+        ):
+            return {"status": "rejected", "message": "Soil point belongs to another FarmBot"}
+        requested = [
+            call.data["expected_x"],
+            call.data["expected_y"],
+            call.data["expected_z"],
+            call.data["recommended_z_mm"],
+        ]
+        if not all(math.isfinite(float(value)) for value in requested):
+            return {"status": "rejected", "message": "Soil coordinates must be finite"}
+        try:
+            actual_coordinates = {
+                axis: float(point[axis]) for axis in ("x", "y", "z")
+            }
+        except (KeyError, TypeError, ValueError):
+            return {"status": "rejected", "message": "FarmBot soil coordinates are invalid"}
+        if not all(math.isfinite(value) for value in actual_coordinates.values()):
+            return {"status": "rejected", "message": "FarmBot soil coordinates are invalid"}
+        if any(
+            abs(actual_coordinates[axis] - float(call.data[f"expected_{axis}"])) > 0.5
+            for axis in ("x", "y", "z")
+        ):
+            return {"status": "conflict", "message": "Soil point coordinates changed"}
+        firmware = await _safe_api_call(
+            manager,
+            manager.api.async_get_firmware_config(),
+            context="fetch motion configuration",
+        )
+        z_bounds = manager.soil_motion_state(firmware)["axis_bounds"]["z"]
+        recommended = float(call.data["recommended_z_mm"])
+        if z_bounds is None or not z_bounds[0] <= recommended <= z_bounds[1]:
+            return {"status": "rejected", "message": "Recommended soil Z is outside FarmBot bounds"}
+        if not call.data["apply"]:
+            return {"status": "validated", "message": "Validated; no write performed"}
+        if not call.data["human_approved"]:
+            return {"status": "rejected", "message": "Human approval is required"}
+        await _safe_api_call(
+            manager,
+            manager.api.async_patch_soil_height(call.data["point_id"], recommended),
+            context="update soil height",
+        )
+        updated = await _safe_api_call(
+            manager,
+            manager.api.async_get_point(call.data["point_id"]),
+            context="verify soil height update",
+        )
+        if not manager.is_soil_height_point(updated):
+            return {"status": "conflict", "message": "FarmBot soil point changed during update"}
+        try:
+            actual = float(updated["z"])
+        except (KeyError, TypeError, ValueError):
+            return {"status": "conflict", "message": "FarmBot returned an invalid soil height"}
+        if not math.isfinite(actual) or abs(actual - recommended) > 0.5:
+            return {"status": "conflict", "message": "FarmBot did not persist the soil height"}
+        return {
+            "status": "applied",
+            "point_id": call.data["point_id"],
+            "old_z_mm": float(point["z"]),
+            "z_mm": actual,
+            "message": "Soil height updated",
+        }
+
     async def apply_vision_radius(call: ServiceCall) -> dict:
         manager = _get_manager(hass, call.data["config_entry_id"])
         plant_id = call.data["plant_id"]
@@ -707,6 +960,58 @@ def _async_register_services(hass: HomeAssistant) -> None:
             "message": "Weed created",
         }
 
+    async def update_vision_weed_radius(call: ServiceCall) -> dict:
+        """Increase a known Weed point radius after an identity-safe lookup."""
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        point = await _safe_api_call(
+            manager,
+            manager.api.async_get_point(call.data["weed_id"]),
+            context="fetch weed for radius update",
+        )
+        if not isinstance(point, dict) or point.get("pointer_type") != "Weed":
+            return {"status": "rejected", "message": "Weed was not found"}
+        actual = float(point.get("radius", 0))
+        if abs(actual - call.data["expected_current_radius_mm"]) > 0.5:
+            return {"status": "conflict", "message": "Weed radius changed"}
+        recommended = max(actual, float(call.data["recommended_radius_mm"]))
+        if not call.data["apply"]:
+            return {"status": "validated", "message": "Validated; no write performed"}
+        updated = await _safe_api_call(
+            manager,
+            manager.api.async_patch_weed_radius(call.data["weed_id"], recommended),
+            context="update weed radius",
+        )
+        return {
+            "status": "applied",
+            "weed_id": call.data["weed_id"],
+            "old_radius_mm": actual,
+            "radius_mm": updated.get("radius", recommended),
+            "message": "Weed radius updated",
+        }
+
+    async def remove_vision_weed(call: ServiceCall) -> dict:
+        """Remove a known Weed point after the app confirms disappearance."""
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        point = await _safe_api_call(
+            manager,
+            manager.api.async_get_point(call.data["weed_id"]),
+            context="fetch weed for removal",
+        )
+        if not isinstance(point, dict) or point.get("pointer_type") != "Weed":
+            return {"status": "rejected", "message": "Weed was not found"}
+        if not call.data["apply"]:
+            return {"status": "validated", "message": "Validated; no write performed"}
+        await _safe_api_call(
+            manager,
+            manager.api.async_remove_weed(call.data["weed_id"]),
+            context="remove weed",
+        )
+        return {
+            "status": "applied",
+            "weed_id": call.data["weed_id"],
+            "message": "Weed marked removed",
+        }
+
     async def upsert_vision_spread_curve(call: ServiceCall) -> dict:
         manager = _get_manager(hass, call.data["config_entry_id"])
         crop_slug = call.data["crop_slug"]
@@ -890,6 +1195,34 @@ def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        SERVICE_GET_VISION_SOIL_POINTS,
+        _vision_response_service(get_vision_soil_points),
+        schema=SERVICE_GET_VISION_SOIL_POINTS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_START_VISION_SOIL_CAPTURE,
+        _vision_response_service(start_vision_soil_capture),
+        schema=SERVICE_START_VISION_SOIL_CAPTURE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_VISION_SOIL_CAPTURE,
+        _vision_response_service(get_vision_soil_capture),
+        schema=SERVICE_GET_VISION_SOIL_CAPTURE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_APPLY_VISION_SOIL_HEIGHT,
+        _vision_response_service(apply_vision_soil_height),
+        schema=SERVICE_APPLY_VISION_SOIL_HEIGHT_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_APPLY_VISION_RADIUS,
         apply_vision_radius,
         schema=SERVICE_APPLY_VISION_RADIUS_SCHEMA,
@@ -914,6 +1247,20 @@ def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_CREATE_VISION_WEED,
         create_vision_weed,
         schema=SERVICE_CREATE_VISION_WEED_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_UPDATE_VISION_WEED_RADIUS,
+        update_vision_weed_radius,
+        schema=SERVICE_UPDATE_VISION_WEED_RADIUS_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REMOVE_VISION_WEED,
+        remove_vision_weed,
+        schema=SERVICE_REMOVE_VISION_WEED_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
     )
     hass.services.async_register(
@@ -947,10 +1294,16 @@ def _async_remove_services_if_last_entry(hass: HomeAssistant) -> None:
         SERVICE_LIST_VISION_BOTS,
         SERVICE_GET_VISION_INVENTORY,
         SERVICE_GET_VISION_IMAGE,
+        SERVICE_GET_VISION_SOIL_POINTS,
+        SERVICE_START_VISION_SOIL_CAPTURE,
+        SERVICE_GET_VISION_SOIL_CAPTURE,
+        SERVICE_APPLY_VISION_SOIL_HEIGHT,
         SERVICE_APPLY_VISION_RADIUS,
         SERVICE_APPLY_VISION_REMOVAL,
         SERVICE_APPLY_VISION_PLANT_CENTER,
         SERVICE_CREATE_VISION_WEED,
+        SERVICE_UPDATE_VISION_WEED_RADIUS,
+        SERVICE_REMOVE_VISION_WEED,
         SERVICE_UPSERT_VISION_SPREAD_CURVE,
         SERVICE_REPORT_VISION_STATUS,
         SERVICE_REQUEST_VISION_ANALYSIS,

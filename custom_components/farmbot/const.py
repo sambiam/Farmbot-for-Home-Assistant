@@ -7,6 +7,7 @@ MQTT_PORT = 8883
 # MQTT topic templates
 TOPIC_STATUS  = "bot/{device_id}/status"
 TOPIC_COMMAND = "bot/{device_id}/from_clients"
+TOPIC_FROM_DEVICE = "bot/{device_id}/from_device"
 TOPIC_LOGS    = "bot/{device_id}/logs"
 
 # Dispatcher signals
@@ -37,10 +38,16 @@ SERVICE_MOVE_TO = "move_to"
 SERVICE_LIST_VISION_BOTS = "list_vision_bots"
 SERVICE_GET_VISION_INVENTORY = "get_vision_inventory"
 SERVICE_GET_VISION_IMAGE = "get_vision_image"
+SERVICE_GET_VISION_SOIL_POINTS = "get_vision_soil_points"
+SERVICE_START_VISION_SOIL_CAPTURE = "start_vision_soil_capture"
+SERVICE_GET_VISION_SOIL_CAPTURE = "get_vision_soil_capture"
+SERVICE_APPLY_VISION_SOIL_HEIGHT = "apply_vision_soil_height"
 SERVICE_APPLY_VISION_RADIUS = "apply_vision_radius"
 SERVICE_APPLY_VISION_REMOVAL = "apply_vision_removal"
 SERVICE_APPLY_VISION_PLANT_CENTER = "apply_vision_plant_center"
 SERVICE_CREATE_VISION_WEED = "create_vision_weed"
+SERVICE_UPDATE_VISION_WEED_RADIUS = "update_vision_weed_radius"
+SERVICE_REMOVE_VISION_WEED = "remove_vision_weed"
 SERVICE_UPSERT_VISION_SPREAD_CURVE = "upsert_vision_spread_curve"
 SERVICE_REPORT_VISION_STATUS = "report_vision_status"
 SERVICE_REQUEST_VISION_ANALYSIS = "request_vision_analysis"
@@ -91,6 +98,15 @@ DEFAULT_IMAGE_MAX_HEIGHT = 480
 # 1280x960) and the native FarmBot camera (2592x1944), but still bounded so a
 # caller can never request an arbitrarily large re-encode.
 MAX_IMAGE_DIMENSION = 4096
+
+# Soil-height capture limits. The companion app may choose stricter values,
+# but the integration is the final authority before any movement is sent.
+MIN_SOIL_BASELINE_MM = 5.0
+MAX_SOIL_BASELINE_MM = 30.0
+MAX_SOIL_Z_OFFSET_MM = 75.0
+SOIL_RPC_TIMEOUT_SECONDS = 120
+SOIL_IMAGE_TIMEOUT_SECONDS = 180
+SOIL_CAPTURE_SETTLE_MILLISECONDS = 1500
 
 # Decompression-bomb guards applied to the *decoded* source image, before any
 # resize. A native FarmBot frame is 2592x1944 (~5 MP); these limits leave

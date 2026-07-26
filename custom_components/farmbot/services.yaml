@@ -97,6 +97,113 @@ get_vision_image:
           max: 4096
           mode: box
 
+get_vision_soil_points:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+
+start_vision_soil_capture:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    point_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
+    capture_z:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    baseline_mm:
+      required: true
+      selector:
+        number:
+          min: 5
+          max: 30
+          mode: box
+          step: any
+    z_offsets_mm:
+      required: true
+      selector:
+        object:
+
+get_vision_soil_capture:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    capture_id:
+      required: true
+      selector:
+        text:
+
+apply_vision_soil_height:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    point_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
+    measurement_id:
+      required: true
+      selector:
+        text:
+    expected_x:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    expected_y:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    expected_z:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    recommended_z_mm:
+      required: true
+      selector:
+        number:
+          mode: box
+          step: any
+    confidence:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+    apply:
+      selector:
+        boolean:
+    human_approved:
+      selector:
+        boolean:
+
 apply_vision_radius:
   fields:
     config_entry_id:
@@ -272,6 +379,73 @@ create_vision_weed:
     name:
       selector:
         text:
+    confidence:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+    apply:
+      selector:
+        boolean:
+    human_approved:
+      selector:
+        boolean:
+
+update_vision_weed_radius:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    weed_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
+    expected_current_radius_mm:
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box
+    recommended_radius_mm:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 250
+          mode: box
+    confidence:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+    apply:
+      selector:
+        boolean:
+    human_approved:
+      selector:
+        boolean:
+
+remove_vision_weed:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    weed_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
     confidence:
       required: true
       selector:

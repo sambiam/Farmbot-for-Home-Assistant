@@ -278,6 +278,11 @@ class FarmbotApiClient:
         data = await self._request_json("GET", self._with_query("/points", params))
         return data if isinstance(data, list) else []
 
+    async def async_get_firmware_config(self) -> dict:
+        """Return motion configuration used to derive conservative axis bounds."""
+        data = await self._request_json("GET", "/firmware_config")
+        return data if isinstance(data, dict) else {}
+
     async def async_get_active_plants(self) -> list[dict]:
         """Return Plant points that are planted/sprouted/active (not archived)."""
         points = await self.async_get_points(pointer_type=POINTER_TYPE_PLANT)
@@ -309,6 +314,16 @@ class FarmbotApiClient:
         )
         return data if isinstance(data, dict) else {}
 
+    async def async_patch_soil_height(self, point_id: int, z: float) -> dict:
+        """Patch only the Z coordinate of an existing soil-height point."""
+        data = await self._request_json(
+            "PATCH",
+            f"/points/{int(point_id)}",
+            json_body={"z": float(z)},
+            idempotent=False,
+        )
+        return data if isinstance(data, dict) else {}
+
     async def async_create_weed(
         self, *, name: str, x: float, y: float, z: float, radius: float
     ) -> dict:
@@ -323,6 +338,23 @@ class FarmbotApiClient:
                 "z": z,
                 "radius": radius,
             },
+            idempotent=False,
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def async_patch_weed_radius(self, point_id: int, radius_mm: float) -> dict:
+        data = await self._request_json(
+            "PATCH",
+            f"/points/{int(point_id)}",
+            json_body={"radius": radius_mm},
+            idempotent=False,
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def async_remove_weed(self, point_id: int) -> dict:
+        data = await self._request_json(
+            "DELETE",
+            f"/points/{int(point_id)}",
             idempotent=False,
         )
         return data if isinstance(data, dict) else {}

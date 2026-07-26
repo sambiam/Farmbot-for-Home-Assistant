@@ -89,6 +89,10 @@ only ever talks to Home Assistant's service/event API.
   relevant spread curves (`farmbot.get_vision_inventory`)
 - Download one resized, EXIF-corrected JPEG at a time
   (`farmbot.get_vision_image`)
+- Inventory recognized soil-height points, run acknowledged safe-motion
+  virtual-stereo captures, inspect their status, and apply a reviewed Z value
+  (`farmbot.get_vision_soil_points`, `farmbot.start_vision_soil_capture`,
+  `farmbot.get_vision_soil_capture`, `farmbot.apply_vision_soil_height`)
 - Propose a plant-radius change, either as a dry-run or an actual write
   (`farmbot.apply_vision_radius`)
 - Create/update a FarmBot Vision-owned spread curve and assign it to plants
@@ -119,6 +123,11 @@ value:
 - Every plant/curve write is re-checked against the FarmBot device_id of
   the config entry the call was made against; a plant belonging to a
   different bot is always rejected.
+- Soil-height writes require explicit human approval, recognized soil metadata,
+  and an unchanged GenericPointer snapshot. Only its `z` field is patched.
+- Soil captures refuse disconnected, busy, emergency-stopped, or out-of-bounds
+  bots; use acknowledged safe-Z movement; and restore the initial position when
+  possible. Stopping the app workflow never sends an emergency stop.
 
 ### `get_vision_image` response contract
 
@@ -261,8 +270,12 @@ which coordinate system a calibration belongs to.
 
 ### Minimum FarmBot Vision app version
 
-This bridge's service/event contract is documented as version `1.2.0` of
-this integration. The `1.2.0` `get_vision_image` response adds
+The soil-height bridge requires integration version **1.7.0**. It adds the
+four typed soil services and FarmBot RPC acknowledgement handling while
+retaining the existing image contract. Earlier app features remain compatible
+with older integrations.
+
+The `1.2.0` `get_vision_image` response added
 `source_sha256`, `source_width`/`source_height`, `oriented_width`/
 `oriented_height`, `resize_scale_x`/`resize_scale_y`, and
 `processed_calibration` as **optional, additive** fields; the `1.1.0` fields
@@ -272,7 +285,8 @@ change is that `sha256` now hashes the returned JPEG (as it always should
 have) rather than the original download; an app that verified `sha256`
 against the base64 payload now succeeds where it previously would have
 mismatched. A companion app that consumes the new fields should declare a
-minimum required integration version of **1.2.0**.
+minimum required integration version of **1.2.0**; soil-height acquisition
+requires **1.7.0**.
 
 ## License
 

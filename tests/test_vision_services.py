@@ -24,14 +24,20 @@ from custom_components.farmbot import (
     SERVICE_APPLY_VISION_PLANT_CENTER,
     SERVICE_APPLY_VISION_RADIUS,
     SERVICE_APPLY_VISION_REMOVAL,
+    SERVICE_APPLY_VISION_SOIL_HEIGHT,
     SERVICE_CREATE_VISION_WEED,
     SERVICE_EXECUTE_SEQUENCE,
     SERVICE_GET_VISION_IMAGE,
     SERVICE_GET_VISION_INVENTORY,
+    SERVICE_GET_VISION_SOIL_CAPTURE,
+    SERVICE_GET_VISION_SOIL_POINTS,
     SERVICE_LIST_VISION_BOTS,
     SERVICE_MOVE_TO,
+    SERVICE_REMOVE_VISION_WEED,
     SERVICE_REPORT_VISION_STATUS,
     SERVICE_REQUEST_VISION_ANALYSIS,
+    SERVICE_START_VISION_SOIL_CAPTURE,
+    SERVICE_UPDATE_VISION_WEED_RADIUS,
     SERVICE_UPSERT_VISION_SPREAD_CURVE,
     _async_register_services,
     _async_remove_services_if_last_entry,
@@ -75,6 +81,8 @@ def test_registers_all_services_with_one_entry():
         SERVICE_GET_VISION_INVENTORY, SERVICE_GET_VISION_IMAGE, SERVICE_APPLY_VISION_RADIUS,
         SERVICE_APPLY_VISION_REMOVAL,
         SERVICE_APPLY_VISION_PLANT_CENTER, SERVICE_CREATE_VISION_WEED,
+        SERVICE_GET_VISION_SOIL_POINTS, SERVICE_START_VISION_SOIL_CAPTURE,
+        SERVICE_GET_VISION_SOIL_CAPTURE, SERVICE_APPLY_VISION_SOIL_HEIGHT,
         SERVICE_UPSERT_VISION_SPREAD_CURVE, SERVICE_REPORT_VISION_STATUS,
         SERVICE_REQUEST_VISION_ANALYSIS,
     ):
@@ -478,6 +486,136 @@ def test_vision_response_service_wraps_unexpected_error_as_structured_500():
     assert err.translation_key == "vision_unexpected_error"
 
 
+# --------------------------- soil-height bridge ---------------------------
+
+def _soil_point(point_id=70, **changes):
+    point = {
+        "id": point_id,
+        "device_id": 42,
+        "pointer_type": "GenericPointer",
+        "name": "Soil Height",
+        "x": 100.0,
+        "y": 200.0,
+        "z": -300.0,
+        "updated_at": "2026-07-26T00:00:00Z",
+        "discarded_at": None,
+        "meta": {
+            "created_by": "measure-soil-height",
+            "at_soil_level": "true",
+        },
+    }
+    point.update(changes)
+    return point
+
+
+def test_get_vision_soil_points_filters_by_metadata_not_name():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    manager.api.points = {
+        70: _soil_point(),
+        71: _soil_point(71, meta={"at_soil_level": True}, x=300),
+        72: _soil_point(72, meta={}, name="Soil Height"),
+        73: _soil_point(73, discarded_at="2026-01-01T00:00:00Z"),
+    }
+    manager.status = {
+        "location_data": {"position": {"x": 10, "y": 20, "z": 0}},
+        "informational_settings": {"busy": False, "locked": False},
+    }
+    _async_register_services(hass)
+
+    result = _run(
+        _call(hass, SERVICE_GET_VISION_SOIL_POINTS, {"config_entry_id": "entry-1"})
+    )
+    assert [point["id"] for point in result["points"]] == [70, 71]
+    assert result["motion"]["axis_bounds"]["x"] == [0.0, 6000.0]
+    assert result["motion"]["axis_bounds"]["z"] == [-1200.0, 0.0]
+
+
+def test_start_and_get_soil_capture_are_typed_and_asynchronous():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    manager.api.points[70] = _soil_point()
+    capture_id = str(uuid.uuid4())
+    calls = []
+
+    def fake_start(**kwargs):
+        calls.append(kwargs)
+        manager.soil_captures[capture_id] = {
+            "capture_id": capture_id,
+            "status": "queued",
+            "message": "Capture queued",
+            "frames": [],
+        }
+        return capture_id
+
+    manager.start_soil_capture = fake_start
+    _async_register_services(hass)
+    started = _run(
+        _call(
+            hass,
+            SERVICE_START_VISION_SOIL_CAPTURE,
+            {
+                "config_entry_id": "entry-1",
+                "point_id": 70,
+                "capture_z": 0,
+                "baseline_mm": 15,
+                "z_offsets_mm": [0, 25, 50],
+            },
+        )
+    )
+    assert started["capture_id"] == capture_id
+    assert calls[0]["z_offsets_mm"] == [0.0, 25.0, 50.0]
+    polled = _run(
+        _call(
+            hass,
+            SERVICE_GET_VISION_SOIL_CAPTURE,
+            {"config_entry_id": "entry-1", "capture_id": capture_id},
+        )
+    )
+    assert polled["status"] == "queued"
+
+
+def test_apply_soil_height_requires_approval_and_detects_stale_point():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    manager.api.points[70] = _soil_point()
+    _async_register_services(hass)
+    payload = {
+        "config_entry_id": "entry-1",
+        "point_id": 70,
+        "measurement_id": str(uuid.uuid4()),
+        "expected_x": 100,
+        "expected_y": 200,
+        "expected_z": -300,
+        "recommended_z_mm": -287,
+        "confidence": 0.91,
+        "apply": True,
+    }
+    rejected = _run(_call(hass, SERVICE_APPLY_VISION_SOIL_HEIGHT, payload))
+    assert rejected["status"] == "rejected"
+    assert manager.api.points[70]["z"] == -300
+
+    applied = _run(
+        _call(
+            hass,
+            SERVICE_APPLY_VISION_SOIL_HEIGHT,
+            {**payload, "human_approved": True},
+        )
+    )
+    assert applied["status"] == "applied"
+    assert manager.api.points[70]["z"] == -287
+    assert manager.api.points[70]["meta"]["created_by"] == "measure-soil-height"
+
+    conflict = _run(
+        _call(
+            hass,
+            SERVICE_APPLY_VISION_SOIL_HEIGHT,
+            {**payload, "human_approved": True},
+        )
+    )
+    assert conflict["status"] == "conflict"
+
+
 # --------------------------- apply_vision_radius ---------------------------
 
 def _plant_record(plant_id, **overrides):
@@ -705,6 +843,51 @@ def test_create_vision_weed_supports_reviewed_write():
     )
     assert result["status"] == "applied"
     assert any(p["pointer_type"] == "Weed" for p in manager.api.points.values())
+
+
+def test_known_weed_radius_only_increases_and_disappeared_weed_can_be_removed():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    manager.api.points[31] = {
+        "id": 31,
+        "pointer_type": "Weed",
+        "x": 123,
+        "y": 456,
+        "radius": 12,
+    }
+    _async_register_services(hass)
+
+    updated = _run(
+        _call(
+            hass,
+            SERVICE_UPDATE_VISION_WEED_RADIUS,
+            {
+                "config_entry_id": "entry-1",
+                "weed_id": 31,
+                "expected_current_radius_mm": 12,
+                "recommended_radius_mm": 19,
+                "confidence": 0.6,
+                "apply": True,
+            },
+        )
+    )
+    assert updated["status"] == "applied"
+    assert manager.api.points[31]["radius"] == 19
+
+    removed = _run(
+        _call(
+            hass,
+            SERVICE_REMOVE_VISION_WEED,
+            {
+                "config_entry_id": "entry-1",
+                "weed_id": 31,
+                "confidence": 0.65,
+                "apply": True,
+            },
+        )
+    )
+    assert removed["status"] == "applied"
+    assert 31 not in manager.api.points
 
 
 # --------------------------- upsert_vision_spread_curve ---------------------------
