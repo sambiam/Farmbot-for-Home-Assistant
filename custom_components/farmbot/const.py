@@ -5,10 +5,10 @@ API_BASE_URL = "https://my.farm.bot/api"
 MQTT_PORT = 8883
 
 # MQTT topic templates
-TOPIC_STATUS  = "bot/{device_id}/status"
+TOPIC_STATUS = "bot/{device_id}/status"
 TOPIC_COMMAND = "bot/{device_id}/from_clients"
 TOPIC_FROM_DEVICE = "bot/{device_id}/from_device"
-TOPIC_LOGS    = "bot/{device_id}/logs"
+TOPIC_LOGS = "bot/{device_id}/logs"
 
 # Dispatcher signals
 SIGNAL_STATE = "farmbot_state_update"
@@ -41,6 +41,8 @@ SERVICE_GET_VISION_IMAGE = "get_vision_image"
 SERVICE_GET_VISION_SOIL_POINTS = "get_vision_soil_points"
 SERVICE_START_VISION_SOIL_CAPTURE = "start_vision_soil_capture"
 SERVICE_GET_VISION_SOIL_CAPTURE = "get_vision_soil_capture"
+SERVICE_START_VISION_GRID_REPAIR = "start_vision_grid_repair"
+SERVICE_GET_VISION_GRID_REPAIR = "get_vision_grid_repair"
 SERVICE_APPLY_VISION_SOIL_HEIGHT = "apply_vision_soil_height"
 SERVICE_APPLY_VISION_RADIUS = "apply_vision_radius"
 SERVICE_APPLY_VISION_REMOVAL = "apply_vision_removal"

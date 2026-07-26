@@ -159,6 +159,30 @@ get_vision_soil_capture:
       selector:
         text:
 
+start_vision_grid_repair:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    targets:
+      required: true
+      selector:
+        object:
+
+get_vision_grid_repair:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    repair_id:
+      required: true
+      selector:
+        text:
+
 apply_vision_soil_height:
   fields:
     config_entry_id:

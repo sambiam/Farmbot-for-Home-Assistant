@@ -3,6 +3,7 @@
 No network or MQTT calls are made; FarmbotApiClient is constructed for
 real (base-URL resolution is pure/local) but never invoked here.
 """
+
 import asyncio
 from datetime import timedelta
 
@@ -23,7 +24,9 @@ def _run(coro):
 def _make_manager(options=None):
     hass = FakeHass()
     entry = ConfigEntry(
-        entry_id="entry-1", unique_id="42", domain="farmbot",
+        entry_id="entry-1",
+        unique_id="42",
+        domain="farmbot",
         data={"token": "tok", "device_id": 42, "mqtt_host": "mqtt.example.com"},
         options=options or {},
     )
@@ -31,7 +34,55 @@ def _make_manager(options=None):
     return hass, manager, entry
 
 
+def test_grid_repair_moves_takes_photos_and_restores_position():
+    async def scenario():
+        _, manager, _ = _make_manager()
+        manager._mqtt_connected = True
+        manager._mqtt = object()
+        manager.status = {
+            "location_data": {"position": {"x": 10, "y": 20, "z": 0}},
+            "informational_settings": {"busy": False, "locked": False},
+        }
+        calls = []
+
+        async def fake_rpc(commands, **kwargs):
+            calls.append(commands)
+            return {"kind": "rpc_ok"}
+
+        manager.async_rpc_request = fake_rpc
+        firmware = {
+            "movement_axis_nr_steps_x": 600000,
+            "movement_axis_nr_steps_y": 300000,
+            "movement_axis_nr_steps_z": 100000,
+            "movement_step_per_mm_x": 100,
+            "movement_step_per_mm_y": 100,
+            "movement_step_per_mm_z": 100,
+        }
+        repair_id = manager.start_grid_repair(
+            targets=[
+                {"x": 100, "y": 200, "z": 0},
+                {"x": 300, "y": 400, "z": 0},
+            ],
+            firmware_config=firmware,
+        )
+        await asyncio.gather(*manager._grid_repair_tasks)
+        assert manager.grid_repair(repair_id)["status"] == "complete"
+        assert [item["kind"] for item in calls[0]] == [
+            "move",
+            "wait",
+            "take_photo",
+            "move",
+            "wait",
+            "take_photo",
+        ]
+        assert calls[1][0]["args"]["x"] == 10
+        await manager.async_close()
+
+    _run(scenario())
+
+
 # --------------------------- options ---------------------------
+
 
 def test_vision_options_returns_defaults_when_unset():
     _, manager, _ = _make_manager()
@@ -55,6 +106,7 @@ def test_vision_options_without_entry_returns_defaults():
 
 
 # --------------------------- heartbeat / availability ---------------------------
+
 
 def test_vision_is_available_false_before_any_heartbeat():
     _, manager, _ = _make_manager()
@@ -151,13 +203,20 @@ def test_vision_availability_does_not_trust_apps_self_reported_flag():
 
 # --------------------------- update_vision_status / dispatch ---------------------------
 
+
 def test_update_vision_status_stores_all_fields():
     _, manager, _ = _make_manager()
     manager.update_vision_status(
-        available=True, status="running", job_id="job-1",
+        available=True,
+        status="running",
+        job_id="job-1",
         last_completed_at="2026-07-17T10:00:00+00:00",
-        plants_analysed=5, recommendations=2, automatically_applied=1,
-        uncertain=1, message="ok", app_version="1.2.3",
+        plants_analysed=5,
+        recommendations=2,
+        automatically_applied=1,
+        uncertain=1,
+        message="ok",
+        app_version="1.2.3",
     )
     assert manager.vision_status == "running"
     assert manager.vision_job_id == "job-1"
@@ -174,6 +233,7 @@ def test_update_vision_status_dispatches_signal_on_change():
     hass, manager, _ = _make_manager()
     received = []
     from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
     async_dispatcher_connect(hass, SIGNAL_VISION_STATE, lambda: received.append(1))
 
     changed = manager.update_vision_status(available=True, status="running")
@@ -185,6 +245,7 @@ def test_update_vision_status_skips_dispatch_for_identical_repeat():
     hass, manager, _ = _make_manager()
     received = []
     from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
     async_dispatcher_connect(hass, SIGNAL_VISION_STATE, lambda: received.append(1))
 
     manager.update_vision_status(available=True, status="running", job_id="job-1")
@@ -198,6 +259,7 @@ def test_update_vision_status_dispatches_again_after_a_real_change():
     hass, manager, _ = _make_manager()
     received = []
     from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
     async_dispatcher_connect(hass, SIGNAL_VISION_STATE, lambda: received.append(1))
 
     manager.update_vision_status(available=True, status="running")
@@ -207,6 +269,7 @@ def test_update_vision_status_dispatches_again_after_a_real_change():
 
 
 # --------------------------- reauth dedup across subsystems ---------------------------
+
 
 class _FakeReauthEntry:
     def __init__(self):

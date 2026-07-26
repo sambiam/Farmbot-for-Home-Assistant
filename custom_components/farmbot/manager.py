@@ -40,12 +40,14 @@ from .jwt_util import decode_jwt_payload
 
 _LOGGER = logging.getLogger(__name__)
 
+
 def _mask(s: str, keep_start: int = 4, keep_end: int = 4) -> str:
     if not s:
         return ""
     if len(s) <= keep_start + keep_end:
         return "*" * len(s)
     return f"{s[:keep_start]}…{s[-keep_end:]}"
+
 
 def _normalize_username(device_id: str) -> str:
     """Ensure username is in 'device_<id>' format required by FarmBot."""
@@ -54,12 +56,22 @@ def _normalize_username(device_id: str) -> str:
         return ""
     return device_id if device_id.startswith("device_") else f"device_{device_id}"
 
+
 def _split_host_port(raw_host: str, default_port: int) -> Tuple[str, int]:
     """Strip schemes like mqtts:// or amqps:// and split out ':port' if present."""
     host = (raw_host or "").strip()
-    for scheme in ("mqtts://", "mqtt://", "amqps://", "amqp://", "ssl://", "tcp://", "wss://", "ws://"):
+    for scheme in (
+        "mqtts://",
+        "mqtt://",
+        "amqps://",
+        "amqp://",
+        "ssl://",
+        "tcp://",
+        "wss://",
+        "ws://",
+    ):
         if host.lower().startswith(scheme):
-            host = host[len(scheme):]
+            host = host[len(scheme) :]
             break
     port = default_port
     if ":" in host:
@@ -68,14 +80,15 @@ def _split_host_port(raw_host: str, default_port: int) -> Tuple[str, int]:
             host, port = h, int(p)
     return host, port
 
+
 class FarmbotManager:
     """Central manager for FarmBot integration over MQTT."""
 
     def __init__(self, hass, token: str, device_id: str, mqtt_host: str, entry=None):
         self.hass = hass
-        self.token = str(token).strip()                 # encoded JWT
-        self.device_id = str(device_id).strip()         # 'device_<id>' or numeric
-        self.mqtt_host_raw = str(mqtt_host).strip()     # must come from token.unencoded.mqtt
+        self.token = str(token).strip()  # encoded JWT
+        self.device_id = str(device_id).strip()  # 'device_<id>' or numeric
+        self.mqtt_host_raw = str(mqtt_host).strip()  # must come from token.unencoded.mqtt
         self.status: dict = {}
         self.device_name = f"FarmBot {self.device_id}"
         self.entry_id: Optional[str] = (
@@ -112,6 +125,8 @@ class FarmbotManager:
         self.soil_captures: dict[str, dict[str, Any]] = {}
         self._soil_capture_tasks: set[asyncio.Task] = set()
         self._claimed_soil_image_ids: set[int] = set()
+        self.grid_repairs: dict[str, dict[str, Any]] = {}
+        self._grid_repair_tasks: set[asyncio.Task] = set()
 
     # -------------------- Token Refresh --------------------
     def _should_refresh_token(self) -> bool:
@@ -134,8 +149,11 @@ class FarmbotManager:
             return True
 
         if time_until_expiry < TOKEN_REFRESH_WINDOW:
-            _LOGGER.info("Token expires in %s seconds (< %s window), will refresh",
-                        time_until_expiry, TOKEN_REFRESH_WINDOW)
+            _LOGGER.info(
+                "Token expires in %s seconds (< %s window), will refresh",
+                time_until_expiry,
+                TOKEN_REFRESH_WINDOW,
+            )
             return True
 
         _LOGGER.debug("Token still valid for %s seconds", time_until_expiry)
@@ -252,7 +270,10 @@ class FarmbotManager:
 
         _LOGGER.info(
             "MQTT: connecting host=%s port=%s user=%s token=%s",
-            host, port, username, _mask(self.token, 8, 8),
+            host,
+            port,
+            username,
+            _mask(self.token, 8, 8),
         )
         try:
             self._mqtt.connect(host, port)
@@ -303,9 +324,7 @@ class FarmbotManager:
                 _LOGGER.warning("MQTT authentication failed, triggering reauth flow")
                 self._auth_failed = True
                 # Schedule reauth trigger in event loop
-                self.hass.loop.call_soon_threadsafe(
-                    self._entry.async_start_reauth, self.hass
-                )
+                self.hass.loop.call_soon_threadsafe(self._entry.async_start_reauth, self.hass)
         else:
             self._mqtt_connected = False
             _LOGGER.error(
@@ -392,10 +411,12 @@ class FarmbotManager:
             self._pending_rpcs.pop(label, None)
 
     def send_write_pin(self, pin: int, value: int):
-        cs = [{
-            "kind": "write_pin",
-            "args": {"pin_number": int(pin), "pin_value": int(value), "pin_mode": 0},
-        }]
+        cs = [
+            {
+                "kind": "write_pin",
+                "args": {"pin_number": int(pin), "pin_value": int(value), "pin_mode": 0},
+            }
+        ]
         self.send_rpc_request(cs)
 
     def send_toggle_pin(self, pin: int):
@@ -416,9 +437,7 @@ class FarmbotManager:
             if self._entry and not self._auth_failed:
                 self._auth_failed = True
                 # This may be called from an executor thread, so schedule in event loop
-                self.hass.loop.call_soon_threadsafe(
-                    self._entry.async_start_reauth, self.hass
-                )
+                self.hass.loop.call_soon_threadsafe(self._entry.async_start_reauth, self.hass)
             return []
 
         resp.raise_for_status()
@@ -483,8 +502,10 @@ class FarmbotManager:
         if not isinstance(meta, dict):
             return False
         at_soil = meta.get("at_soil_level")
-        return meta.get("created_by") == "measure-soil-height" or at_soil is True or (
-            isinstance(at_soil, str) and at_soil.lower() == "true"
+        return (
+            meta.get("created_by") == "measure-soil-height"
+            or at_soil is True
+            or (isinstance(at_soil, str) and at_soil.lower() == "true")
         )
 
     @staticmethod
@@ -508,10 +529,7 @@ class FarmbotManager:
             (self.status or {}).get("mcu_params", {}).get("movement_home_up_z"),
         )
         z_direction = -1 if home_up in (1, True, "1") else 1
-        lengths = {
-            axis: self._axis_length(firmware_config, axis)
-            for axis in ("x", "y", "z")
-        }
+        lengths = {axis: self._axis_length(firmware_config, axis) for axis in ("x", "y", "z")}
         if lengths["z"] is not None and z_direction < 0:
             z_bounds = [-lengths["z"], 0.0]
         elif lengths["z"] is not None:
@@ -522,9 +540,7 @@ class FarmbotManager:
             "connected": self._mqtt is not None and self._mqtt_connected,
             "busy": bool(info.get("busy", False)) or self._soil_capture_lock.locked(),
             "locked": bool(info.get("locked", False)),
-            "position": {
-                axis: position.get(axis) for axis in ("x", "y", "z")
-            },
+            "position": {axis: position.get(axis) for axis in ("x", "y", "z")},
             "z_direction": z_direction,
             "axis_bounds": {
                 "x": [0.0, lengths["x"]] if lengths["x"] is not None else None,
@@ -575,9 +591,7 @@ class FarmbotManager:
                         },
                         {
                             "kind": "wait",
-                            "args": {
-                                "milliseconds": SOIL_CAPTURE_SETTLE_MILLISECONDS
-                            },
+                            "args": {"milliseconds": SOIL_CAPTURE_SETTLE_MILLISECONDS},
                         },
                         {"kind": "take_photo", "args": {}},
                     ]
@@ -608,7 +622,11 @@ class FarmbotManager:
             raise ValueError("FarmBot is not connected")
         if state["locked"]:
             raise ValueError("FarmBot is emergency-stopped")
-        if state["busy"] or any(not task.done() for task in self._soil_capture_tasks):
+        if (
+            state["busy"]
+            or any(not task.done() for task in self._soil_capture_tasks)
+            or any(not task.done() for task in self._grid_repair_tasks)
+        ):
             raise ValueError("FarmBot is busy")
         bounds = state["axis_bounds"]
         if any(bounds[axis] is None for axis in ("x", "y", "z")):
@@ -803,9 +821,7 @@ class FarmbotManager:
                         continue
                 candidates.append(image)
             matched = self._match_soil_frames(candidates, expected)
-            self._claimed_soil_image_ids.update(
-                frame["image_id"] for frame in matched
-            )
+            self._claimed_soil_image_ids.update(frame["image_id"] for frame in matched)
             if len(matched) == len(expected):
                 return matched
             await asyncio.sleep(2)
@@ -820,6 +836,136 @@ class FarmbotManager:
             for key, value in record.items()
             if key not in {"expected_frames", "before_image_ids"}
         }
+
+    def start_grid_repair(
+        self, *, targets: list[dict[str, float]], firmware_config: dict[str, Any]
+    ) -> str:
+        """Start a safe, bounded photo-grid repair and return its session ID."""
+        state = self.soil_motion_state(firmware_config)
+        if not state["connected"]:
+            raise ValueError("FarmBot is not connected")
+        if state["locked"]:
+            raise ValueError("FarmBot is emergency-stopped")
+        if (
+            state["busy"]
+            or self._soil_capture_lock.locked()
+            or any(not task.done() for task in self._grid_repair_tasks)
+            or any(not task.done() for task in self._soil_capture_tasks)
+        ):
+            raise ValueError("FarmBot is busy")
+        bounds = state["axis_bounds"]
+        if any(bounds[axis] is None for axis in ("x", "y", "z")):
+            raise ValueError("FarmBot axis bounds are unavailable")
+        normalized = []
+        for target in targets:
+            try:
+                item = {axis: float(target[axis]) for axis in ("x", "y", "z")}
+            except (KeyError, TypeError, ValueError) as err:
+                raise ValueError("Repair targets require numeric X, Y and Z") from err
+            if not all(math.isfinite(value) for value in item.values()):
+                raise ValueError("Repair target coordinates must be finite")
+            if any(
+                not bounds[axis][0] <= item[axis] <= bounds[axis][1] for axis in ("x", "y", "z")
+            ):
+                raise ValueError("Repair target is outside FarmBot bounds")
+            normalized.append(item)
+        repair_id = str(uuid.uuid4())
+        self.grid_repairs[repair_id] = {
+            "repair_id": repair_id,
+            "status": "queued",
+            "message": "Photo-grid repair queued",
+            "targets": normalized,
+            "created_at": dt_util.utcnow().isoformat(),
+        }
+        task = asyncio.create_task(
+            self._run_grid_repair(
+                repair_id=repair_id,
+                targets=normalized,
+                original_position=state["position"],
+            ),
+            name=f"farmbot-grid-repair-{repair_id}",
+        )
+        self._grid_repair_tasks.add(task)
+        task.add_done_callback(self._grid_repair_tasks.discard)
+        return repair_id
+
+    async def _run_grid_repair(
+        self,
+        *,
+        repair_id: str,
+        targets: list[dict[str, float]],
+        original_position: dict[str, Any],
+    ) -> None:
+        record = self.grid_repairs[repair_id]
+        final_status, final_message = "failed", "Photo-grid repair failed"
+        async with self._soil_capture_lock:
+            try:
+                commands = []
+                for target in targets:
+                    commands.extend(
+                        [
+                            {
+                                "kind": "move",
+                                "args": {
+                                    **target,
+                                    "speed": 100,
+                                    "safe_z": True,
+                                },
+                            },
+                            {
+                                "kind": "wait",
+                                "args": {"milliseconds": SOIL_CAPTURE_SETTLE_MILLISECONDS},
+                            },
+                            {"kind": "take_photo", "args": {}},
+                        ]
+                    )
+                record.update(
+                    status="running",
+                    message=f"Retaking {len(targets)} photo-grid image(s)",
+                    started_at=dt_util.utcnow().isoformat(),
+                )
+                await self.async_rpc_request(
+                    commands, timeout=max(SOIL_RPC_TIMEOUT_SECONDS, len(targets) * 45)
+                )
+                final_status = "complete"
+                final_message = f"Retook {len(targets)} photo-grid image(s)"
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.warning("Photo-grid repair %s failed: %s", repair_id, err)
+                final_message = str(err)[:240] or final_message
+            finally:
+                if all(original_position.get(axis) is not None for axis in ("x", "y", "z")):
+                    try:
+                        await self.async_rpc_request(
+                            [
+                                {
+                                    "kind": "move",
+                                    "args": {
+                                        **{
+                                            axis: float(original_position[axis])
+                                            for axis in ("x", "y", "z")
+                                        },
+                                        "speed": 100,
+                                        "safe_z": True,
+                                    },
+                                }
+                            ],
+                            timeout=60,
+                        )
+                    except Exception as err:  # pylint: disable=broad-except
+                        _LOGGER.warning(
+                            "Could not restore position after grid repair %s: %s",
+                            repair_id,
+                            err,
+                        )
+                record.update(
+                    status=final_status,
+                    message=final_message,
+                    completed_at=dt_util.utcnow().isoformat(),
+                )
+
+    def grid_repair(self, repair_id: str) -> dict[str, Any] | None:
+        record = self.grid_repairs.get(repair_id)
+        return dict(record) if record is not None else None
 
     def _claim_active_soil_images(self, ready: dict[int, dict[str, Any]]) -> None:
         """Claim matching capture frames before the ordinary image event can see them."""
@@ -842,8 +988,7 @@ class FarmbotManager:
                         continue
                 candidates.append(image)
             self._claimed_soil_image_ids.update(
-                frame["image_id"]
-                for frame in self._match_soil_frames(candidates, expected)
+                frame["image_id"] for frame in self._match_soil_frames(candidates, expected)
             )
 
     # -------------------- FarmBot Vision bridge --------------------
@@ -908,8 +1053,15 @@ class FarmbotManager:
         self.vision_app_reported_available = available
 
         snapshot = (
-            status, job_id, last_completed_at, plants_analysed, recommendations,
-            automatically_applied, uncertain, message, app_version,
+            status,
+            job_id,
+            last_completed_at,
+            plants_analysed,
+            recommendations,
+            automatically_applied,
+            uncertain,
+            message,
+            app_version,
         )
         changed = snapshot != self._last_vision_report_snapshot
         self._last_vision_report_snapshot = snapshot
@@ -1018,8 +1170,12 @@ class FarmbotManager:
         """
         for task in list(self._soil_capture_tasks):
             task.cancel()
+        for task in list(self._grid_repair_tasks):
+            task.cancel()
         if self._soil_capture_tasks:
             await asyncio.gather(*self._soil_capture_tasks, return_exceptions=True)
+        if self._grid_repair_tasks:
+            await asyncio.gather(*self._grid_repair_tasks, return_exceptions=True)
         for future in self._pending_rpcs.values():
             if not future.done():
                 future.cancel()

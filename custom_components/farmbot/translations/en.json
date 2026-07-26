@@ -178,6 +178,34 @@
         }
       }
     },
+    "start_vision_grid_repair": {
+      "name": "Start Vision photo-grid repair",
+      "description": "Queue safe, bounded moves that retake missing or invalid photo-grid cells.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot that should retake the images."
+        },
+        "targets": {
+          "name": "Repair targets",
+          "description": "One to twelve objects containing X, Y and Z coordinates."
+        }
+      }
+    },
+    "get_vision_grid_repair": {
+      "name": "Get Vision photo-grid repair",
+      "description": "Return the status of a queued photo-grid repair.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot that owns the repair."
+        },
+        "repair_id": {
+          "name": "Repair ID",
+          "description": "UUID returned by Start Vision photo-grid repair."
+        }
+      }
+    },
     "apply_vision_soil_height": {
       "name": "Apply Vision soil height",
       "description": "Revalidate and replace a stale soil point with a reviewed clear-soil X, Y and Z measurement.",

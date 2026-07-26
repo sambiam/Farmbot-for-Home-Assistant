@@ -3,6 +3,12 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.9.0 - 2026-07-27
+
+- **Added:** Asynchronous FarmBot Vision photo-grid repair services validate
+  target coordinates, issue bounded move-and-photo commands, expose repair
+  status, and restore the bot's starting position.
+
 ## 1.8.0 - 2026-07-26
 
 - **Added:** Soil captures can target an explicitly calculated clear-soil X/Y

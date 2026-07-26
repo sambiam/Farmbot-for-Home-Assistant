@@ -1,4 +1,5 @@
 """The FarmBot integration, including the FarmBot Vision bridge services."""
+
 import asyncio
 import base64
 import functools
@@ -37,6 +38,7 @@ from .const import (
     SERVICE_APPLY_VISION_SOIL_HEIGHT,
     SERVICE_CREATE_VISION_WEED,
     SERVICE_EXECUTE_SEQUENCE,
+    SERVICE_GET_VISION_GRID_REPAIR,
     SERVICE_GET_VISION_IMAGE,
     SERVICE_GET_VISION_INVENTORY,
     SERVICE_GET_VISION_SOIL_CAPTURE,
@@ -46,6 +48,7 @@ from .const import (
     SERVICE_REMOVE_VISION_WEED,
     SERVICE_REPORT_VISION_STATUS,
     SERVICE_REQUEST_VISION_ANALYSIS,
+    SERVICE_START_VISION_GRID_REPAIR,
     SERVICE_START_VISION_SOIL_CAPTURE,
     SERVICE_UPDATE_VISION_WEED_RADIUS,
     SERVICE_UPSERT_VISION_SPREAD_CURVE,
@@ -82,9 +85,7 @@ SERVICE_MOVE_TO_SCHEMA = vol.All(
             vol.Optional("x"): vol.Coerce(float),
             vol.Optional("y"): vol.Coerce(float),
             vol.Optional("z"): vol.Coerce(float),
-            vol.Optional("speed", default=100): vol.All(
-                vol.Coerce(int), vol.Range(min=1, max=100)
-            ),
+            vol.Optional("speed", default=100): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
         }
     ),
     cv.has_at_least_one_key("x", "y", "z"),
@@ -94,6 +95,7 @@ SERVICE_MOVE_TO_SCHEMA = vol.All(
 # --------------------------------------------------------------------------
 # Service schemas - FarmBot Vision bridge
 # --------------------------------------------------------------------------
+
 
 def _cv_uuid(value: Any) -> str:
     """Validate that `value` is a UUID string; return it normalised."""
@@ -146,9 +148,7 @@ SERVICE_GET_VISION_IMAGE_SCHEMA = vol.Schema(
     }
 )
 
-SERVICE_GET_VISION_SOIL_POINTS_SCHEMA = vol.Schema(
-    {vol.Required("config_entry_id"): cv.string}
-)
+SERVICE_GET_VISION_SOIL_POINTS_SCHEMA = vol.Schema({vol.Required("config_entry_id"): cv.string})
 
 SERVICE_START_VISION_SOIL_CAPTURE_SCHEMA = vol.Schema(
     {
@@ -172,6 +172,28 @@ SERVICE_GET_VISION_SOIL_CAPTURE_SCHEMA = vol.Schema(
     {
         vol.Required("config_entry_id"): cv.string,
         vol.Required("capture_id"): _cv_uuid,
+    }
+)
+
+_GRID_REPAIR_TARGET_SCHEMA = vol.Schema(
+    {
+        vol.Required("x"): vol.Coerce(float),
+        vol.Required("y"): vol.Coerce(float),
+        vol.Required("z"): vol.Coerce(float),
+    }
+)
+
+SERVICE_START_VISION_GRID_REPAIR_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("targets"): vol.All([_GRID_REPAIR_TARGET_SCHEMA], vol.Length(min=1, max=12)),
+    }
+)
+
+SERVICE_GET_VISION_GRID_REPAIR_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("repair_id"): _cv_uuid,
     }
 )
 
@@ -343,9 +365,7 @@ async def _safe_api_call(manager: FarmbotManager, coro, *, context: str):
             translation_domain=DOMAIN, translation_key="farmbot_auth_error"
         ) from err
     except FarmbotApiError as err:
-        _LOGGER.error(
-            "FarmBot Vision %s failed for bot %s: %s", context, manager.device_id, err
-        )
+        _LOGGER.error("FarmBot Vision %s failed for bot %s: %s", context, manager.device_id, err)
         raise HomeAssistantError(
             translation_domain=DOMAIN, translation_key="farmbot_api_error"
         ) from err
@@ -365,6 +385,7 @@ def _vision_response_service(handler):
     structured status the FarmBot Vision app can act on, while validation
     rejections keep flowing through untouched as their proper 400.
     """
+
     @functools.wraps(handler)
     async def wrapper(call: ServiceCall):
         try:
@@ -372,9 +393,7 @@ def _vision_response_service(handler):
         except HomeAssistantError:
             raise
         except Exception as err:  # pylint: disable=broad-except
-            _LOGGER.exception(
-                "Unexpected error in FarmBot Vision service %s", handler.__name__
-            )
+            _LOGGER.exception("Unexpected error in FarmBot Vision service %s", handler.__name__)
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="vision_unexpected_error",
@@ -423,9 +442,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         execute_sequence,
         schema=SERVICE_EXECUTE_SEQUENCE_SCHEMA,
     )
-    hass.services.async_register(
-        DOMAIN, SERVICE_MOVE_TO, move_to, schema=SERVICE_MOVE_TO_SCHEMA
-    )
+    hass.services.async_register(DOMAIN, SERVICE_MOVE_TO, move_to, schema=SERVICE_MOVE_TO_SCHEMA)
 
     # -------------------- FarmBot Vision bridge services --------------------
 
@@ -469,9 +486,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
             "generated_at": now.isoformat(),
             "plants": [vision.project_plant(p) for p in plants],
             "images": [vision.project_image(i) for i in recent_images],
-            "curves": vision.select_relevant_curves(
-                plants, curves, include_all=include_all_curves
-            ),
+            "curves": vision.select_relevant_curves(plants, curves, include_all=include_all_curves),
             "camera_calibration": calibration,
         }
 
@@ -554,8 +569,12 @@ def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.debug(
             "FarmBot Vision image %s processed %dx%d -> %dx%d "
             "(%d bytes JPEG; base64 and signed URL not logged)",
-            image_id, processed.oriented_width, processed.oriented_height,
-            processed.width, processed.height, len(processed.jpeg_bytes),
+            image_id,
+            processed.oriented_width,
+            processed.oriented_height,
+            processed.width,
+            processed.height,
+            len(processed.jpeg_bytes),
         )
         response = {
             "image_id": image_id,
@@ -635,9 +654,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         updated = _soil_updated_at(point)
         return bool(
             updated is not None
-            and updated
-            < dt_util.utcnow().astimezone(UTC)
-            - timedelta(days=SOIL_POINT_STALE_DAYS)
+            and updated < dt_util.utcnow().astimezone(UTC) - timedelta(days=SOIL_POINT_STALE_DAYS)
         )
 
     async def start_vision_soil_capture(call: ServiceCall) -> dict:
@@ -667,9 +684,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
             }
         capture_x = float(call.data["capture_x"]) if has_x else float(point["x"])
         capture_y = float(call.data["capture_y"]) if has_y else float(point["y"])
-        relocation = math.hypot(
-            capture_x - float(point["x"]), capture_y - float(point["y"])
-        )
+        relocation = math.hypot(capture_x - float(point["x"]), capture_y - float(point["y"]))
         if relocation >= MAX_SOIL_RELOCATION_MM:
             return {
                 "status": "rejected",
@@ -724,6 +739,34 @@ def _async_register_services(hass: HomeAssistant) -> None:
             return {"status": "failed", "message": "Soil capture was not found", "frames": []}
         return capture
 
+    async def start_vision_grid_repair(call: ServiceCall) -> dict:
+        """Queue bounded move-and-photo commands for missing grid cells."""
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        firmware = await _safe_api_call(
+            manager,
+            manager.api.async_get_firmware_config(),
+            context="fetch motion configuration for grid repair",
+        )
+        try:
+            repair_id = manager.start_grid_repair(
+                targets=[dict(item) for item in call.data["targets"]],
+                firmware_config=firmware,
+            )
+        except ValueError as err:
+            return {"status": "rejected", "message": str(err)[:240]}
+        return {
+            "status": "queued",
+            "repair_id": repair_id,
+            "message": "Photo-grid repair queued",
+        }
+
+    async def get_vision_grid_repair(call: ServiceCall) -> dict:
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        repair = manager.grid_repair(call.data["repair_id"])
+        if repair is None:
+            return {"status": "failed", "message": "Photo-grid repair was not found"}
+        return repair
+
     async def apply_vision_soil_height(call: ServiceCall) -> dict:
         """Relocate a stale soil point after concurrency and approval checks."""
         manager = _get_manager(hass, call.data["config_entry_id"])
@@ -749,9 +792,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if not all(math.isfinite(float(value)) for value in requested):
             return {"status": "rejected", "message": "Soil coordinates must be finite"}
         try:
-            actual_coordinates = {
-                axis: float(point[axis]) for axis in ("x", "y", "z")
-            }
+            actual_coordinates = {axis: float(point[axis]) for axis in ("x", "y", "z")}
         except (KeyError, TypeError, ValueError):
             return {"status": "rejected", "message": "FarmBot soil coordinates are invalid"}
         if not all(math.isfinite(value) for value in actual_coordinates.values()):
@@ -861,7 +902,13 @@ def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info(
             "FarmBot Vision radius proposal: bot=%s plant=%s measurement=%s "
             "expected_mm=%.1f recommended_mm=%.1f confidence=%.2f apply=%s",
-            manager.device_id, plant_id, measurement_id, expected, recommended, confidence, apply,
+            manager.device_id,
+            plant_id,
+            measurement_id,
+            expected,
+            recommended,
+            confidence,
+            apply,
         )
 
         point = await _safe_api_call(
@@ -881,7 +928,9 @@ def _async_register_services(hass: HomeAssistant) -> None:
             message = _RADIUS_REJECTION_MESSAGES.get(result.reason, result.reason)
             _LOGGER.warning(
                 "FarmBot Vision radius proposal for plant %s: %s (%s)",
-                plant_id, status, message,
+                plant_id,
+                status,
+                message,
             )
             return {
                 "status": status,
@@ -913,9 +962,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
             updated_point = await _safe_api_call(
                 manager, manager.api.async_get_point(plant_id), context="verify plant radius"
             )
-            new_radius = (
-                updated_point.get("radius") if isinstance(updated_point, dict) else None
-            )
+            new_radius = updated_point.get("radius") if isinstance(updated_point, dict) else None
             if isinstance(new_radius, (int, float)) and abs(new_radius - recommended) <= 0.5:
                 break
             if attempt < 2:
@@ -936,7 +983,9 @@ def _async_register_services(hass: HomeAssistant) -> None:
             }
         _LOGGER.info(
             "FarmBot Vision applied radius change for plant %s: %s mm -> %s mm",
-            plant_id, actual_radius, new_radius,
+            plant_id,
+            actual_radius,
+            new_radius,
         )
         return {
             "status": "applied",
@@ -1146,7 +1195,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
                     translation_domain=DOMAIN,
                     translation_key="vision_curve_assignment_invalid",
                     translation_placeholders={
-                        "plant_id": str(plant_id), "reason": plant_result.reason
+                        "plant_id": str(plant_id),
+                        "reason": plant_result.reason,
                     },
                 )
             assignment_targets.append((plant_id, plant))
@@ -1183,10 +1233,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         )
         expected_curve_data = {str(day): int(value) for day, value in data.items()}
         actual_curve_data = (
-            {
-                str(day): int(value)
-                for day, value in (verified_curve.get("data") or {}).items()
-            }
+            {str(day): int(value) for day, value in (verified_curve.get("data") or {}).items()}
             if isinstance(verified_curve, dict)
             else {}
         )
@@ -1227,7 +1274,9 @@ def _async_register_services(hass: HomeAssistant) -> None:
             _LOGGER.error(
                 "FarmBot Vision curve assignment failed partway through for bot %s; "
                 "rolled back %d/%d plant(s) (rollback failed for %s)",
-                manager.device_id, len(applied) - len(rollback_failed), len(applied),
+                manager.device_id,
+                len(applied) - len(rollback_failed),
+                len(applied),
                 rollback_failed,
             )
             raise
@@ -1308,6 +1357,20 @@ def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_GET_VISION_SOIL_CAPTURE,
         _vision_response_service(get_vision_soil_capture),
         schema=SERVICE_GET_VISION_SOIL_CAPTURE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_START_VISION_GRID_REPAIR,
+        _vision_response_service(start_vision_grid_repair),
+        schema=SERVICE_START_VISION_GRID_REPAIR_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_VISION_GRID_REPAIR,
+        _vision_response_service(get_vision_grid_repair),
+        schema=SERVICE_GET_VISION_GRID_REPAIR_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     hass.services.async_register(
@@ -1393,6 +1456,8 @@ def _async_remove_services_if_last_entry(hass: HomeAssistant) -> None:
         SERVICE_GET_VISION_SOIL_POINTS,
         SERVICE_START_VISION_SOIL_CAPTURE,
         SERVICE_GET_VISION_SOIL_CAPTURE,
+        SERVICE_START_VISION_GRID_REPAIR,
+        SERVICE_GET_VISION_GRID_REPAIR,
         SERVICE_APPLY_VISION_SOIL_HEIGHT,
         SERVICE_APPLY_VISION_RADIUS,
         SERVICE_APPLY_VISION_REMOVAL,
@@ -1409,7 +1474,7 @@ def _async_remove_services_if_last_entry(hass: HomeAssistant) -> None:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up FarmBot from a config entry."""
-    token     = entry.data["token"]
+    token = entry.data["token"]
     device_id = entry.data["device_id"]
     mqtt_host = entry.data["mqtt_host"]
 
@@ -1430,9 +1495,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await manager.async_check_and_refresh_token()
 
     refresh_interval = timedelta(seconds=TOKEN_REFRESH_INTERVAL)
-    entry.async_on_unload(
-        async_track_time_interval(hass, _periodic_token_check, refresh_interval)
-    )
+    entry.async_on_unload(async_track_time_interval(hass, _periodic_token_check, refresh_interval))
     _LOGGER.info("Token refresh scheduler started (interval: %s)", refresh_interval)
 
     # Establish the processed-image baseline, then turn each newly completed
@@ -1454,6 +1517,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
+
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Migrate an old FarmBot config entry to the current version.
 
@@ -1465,7 +1529,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.error(
             "FarmBot config entry %s has version %s, newer than supported "
             "version %s; refusing to migrate",
-            entry.entry_id, entry.version, FarmbotConfigFlow.VERSION,
+            entry.entry_id,
+            entry.version,
+            FarmbotConfigFlow.VERSION,
         )
         return False
 
@@ -1486,22 +1552,20 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     _LOGGER.error(
                         "Cannot migrate FarmBot config entry %s: bot id %s is already "
                         "claimed by config entry %s",
-                        entry.entry_id, new_unique_id, other.entry_id,
+                        entry.entry_id,
+                        new_unique_id,
+                        other.entry_id,
                     )
                     return False
 
-            hass.config_entries.async_update_entry(
-                entry, unique_id=new_unique_id, version=2
-            )
+            hass.config_entries.async_update_entry(entry, unique_id=new_unique_id, version=2)
             _LOGGER.info(
                 "Migrated FarmBot config entry %s to version 2 (assigned unique_id)",
                 entry.entry_id,
             )
         else:
             hass.config_entries.async_update_entry(entry, version=2)
-            _LOGGER.info(
-                "Migrated FarmBot config entry %s to version 2", entry.entry_id
-            )
+            _LOGGER.info("Migrated FarmBot config entry %s to version 2", entry.entry_id)
 
     return True
 
