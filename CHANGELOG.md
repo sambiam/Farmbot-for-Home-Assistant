@@ -3,6 +3,15 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.0.0 - 2026-07-27
+
+- **Fixed:** The integration now advertises its version and
+  `photo_grid_repair` capability through `list_vision_bots`, allowing the
+  Vision app to verify that the loaded Home Assistant runtime actually
+  registered the repair service before it sends a motion request.
+- **Tested:** Added an end-to-end service-schema regression test using the
+  exact nested target payload sent by the Vision app.
+
 ## 1.9.0 - 2026-07-27
 
 - **Added:** Asynchronous FarmBot Vision photo-grid repair services validate

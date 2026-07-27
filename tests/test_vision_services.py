@@ -27,6 +27,7 @@ from custom_components.farmbot import (
     SERVICE_APPLY_VISION_SOIL_HEIGHT,
     SERVICE_CREATE_VISION_WEED,
     SERVICE_EXECUTE_SEQUENCE,
+    SERVICE_GET_VISION_GRID_REPAIR,
     SERVICE_GET_VISION_IMAGE,
     SERVICE_GET_VISION_INVENTORY,
     SERVICE_GET_VISION_SOIL_CAPTURE,
@@ -36,6 +37,7 @@ from custom_components.farmbot import (
     SERVICE_REMOVE_VISION_WEED,
     SERVICE_REPORT_VISION_STATUS,
     SERVICE_REQUEST_VISION_ANALYSIS,
+    SERVICE_START_VISION_GRID_REPAIR,
     SERVICE_START_VISION_SOIL_CAPTURE,
     SERVICE_UPDATE_VISION_WEED_RADIUS,
     SERVICE_UPSERT_VISION_SPREAD_CURVE,
@@ -577,6 +579,62 @@ def test_start_and_get_soil_capture_are_typed_and_asynchronous():
         )
     )
     assert polled["status"] == "queued"
+
+
+def test_start_grid_repair_accepts_app_payload_and_is_pollable():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    repair_id = str(uuid.uuid4())
+    calls = []
+
+    def fake_start_grid_repair(**kwargs):
+        calls.append(kwargs)
+        manager.grid_repairs[repair_id] = {
+            "repair_id": repair_id,
+            "status": "queued",
+            "message": "Photo-grid repair queued",
+            "targets": kwargs["targets"],
+        }
+        return repair_id
+
+    manager.start_grid_repair = fake_start_grid_repair
+    _async_register_services(hass)
+    started = _run(
+        _call(
+            hass,
+            SERVICE_START_VISION_GRID_REPAIR,
+            {
+                "config_entry_id": "entry-1",
+                "targets": [
+                    {"x": 100.0, "y": 200.0, "z": 0.0},
+                    {"x": 300.0, "y": 400.0, "z": -10.0},
+                ],
+            },
+        )
+    )
+    assert started == {
+        "status": "queued",
+        "repair_id": repair_id,
+        "message": "Photo-grid repair queued",
+    }
+    assert calls[0]["targets"][1] == {"x": 300.0, "y": 400.0, "z": -10.0}
+    polled = _run(
+        _call(
+            hass,
+            SERVICE_GET_VISION_GRID_REPAIR,
+            {"config_entry_id": "entry-1", "repair_id": repair_id},
+        )
+    )
+    assert polled["status"] == "queued"
+
+
+def test_list_bots_advertises_grid_repair_capability():
+    hass = FakeHass()
+    _make_bot(hass)
+    _async_register_services(hass)
+    result = _run(_call(hass, SERVICE_LIST_VISION_BOTS, {}))
+    assert result["bots"][0]["integration_version"] == "2.0.0"
+    assert "photo_grid_repair" in result["bots"][0]["capabilities"]
 
 
 def test_apply_soil_height_requires_approval_and_detects_stale_point():

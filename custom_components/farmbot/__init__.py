@@ -26,6 +26,7 @@ from .const import (
     DEFAULT_IMAGE_MAX_WIDTH,
     DOMAIN,
     EVENT_VISION_REQUEST,
+    INTEGRATION_VERSION,
     MAX_IMAGE_DIMENSION,
     MAX_IMAGE_LOOKBACK_HOURS,
     MAX_SOIL_BASELINE_MM,
@@ -55,6 +56,7 @@ from .const import (
     SOIL_POINT_STALE_DAYS,
     TOKEN_REFRESH_INTERVAL,
     VISION_ANALYSIS_MODES,
+    VISION_CAPABILITIES,
     VISION_CURVE_TYPE,
     VISION_IMAGE_POLL_INTERVAL_SECONDS,
     VISION_STATUS_VALUES,
@@ -452,6 +454,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 "config_entry_id": entry_id,
                 "device_id": manager.device_id,
                 "name": manager.device_name,
+                "integration_version": INTEGRATION_VERSION,
+                "capabilities": VISION_CAPABILITIES,
             }
             for entry_id, manager in hass.data.get(DOMAIN, {}).items()
         ]

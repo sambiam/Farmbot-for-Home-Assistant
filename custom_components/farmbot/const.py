@@ -29,6 +29,8 @@ VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
+INTEGRATION_VERSION = "2.0.0"
+VISION_CAPABILITIES = ["photo_grid_repair"]
 
 # Service names (existing)
 SERVICE_EXECUTE_SEQUENCE = "execute_sequence"
