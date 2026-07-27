@@ -49,7 +49,24 @@ def test_grid_repair_moves_takes_photos_and_restores_position():
             calls.append(commands)
             return {"kind": "rpc_ok"}
 
+        async def fake_images():
+            return []
+
+        captured = 0
+
+        async def fake_wait_for_grid_image(**kwargs):
+            nonlocal captured
+            captured += 1
+            target = kwargs["target"]
+            return {
+                "image_id": captured,
+                **target,
+                "distance_from_target_mm": 0,
+            }
+
         manager.async_rpc_request = fake_rpc
+        manager.api.async_get_images = fake_images
+        manager._wait_for_grid_image = fake_wait_for_grid_image
         firmware = {
             "movement_axis_nr_steps_x": 600000,
             "movement_axis_nr_steps_y": 300000,
@@ -66,16 +83,136 @@ def test_grid_repair_moves_takes_photos_and_restores_position():
             firmware_config=firmware,
         )
         await asyncio.gather(*manager._grid_repair_tasks)
-        assert manager.grid_repair(repair_id)["status"] == "complete"
-        assert [item["kind"] for item in calls[0]] == [
-            "move",
-            "wait",
-            "take_photo",
-            "move",
-            "wait",
-            "take_photo",
+        repair = manager.grid_repair(repair_id)
+        assert repair["status"] == "complete"
+        assert repair["frames"] == [
+            {
+                "image_id": 1,
+                "x": 100.0,
+                "y": 200.0,
+                "z": 0.0,
+                "distance_from_target_mm": 0,
+            },
+            {
+                "image_id": 2,
+                "x": 300.0,
+                "y": 400.0,
+                "z": 0.0,
+                "distance_from_target_mm": 0,
+            },
         ]
-        assert calls[1][0]["args"]["x"] == 10
+        assert [[item["kind"] for item in command] for command in calls] == [
+            ["move"],
+            ["wait", "take_photo"],
+            ["move"],
+            ["wait", "take_photo"],
+            ["move"],
+        ]
+        assert calls[0][0]["args"]["safe_z"] is True
+        assert calls[-1][0]["args"]["x"] == 10
+        await manager.async_close()
+
+    _run(scenario())
+
+
+def test_grid_repair_retries_photo_until_a_processed_target_image_exists():
+    async def scenario():
+        _, manager, _ = _make_manager()
+        manager._mqtt_connected = True
+        manager._mqtt = object()
+        manager.status = {
+            "location_data": {"position": {"x": 10, "y": 20, "z": 0}},
+            "informational_settings": {"busy": False, "locked": False},
+        }
+        calls = []
+
+        async def fake_rpc(commands, **kwargs):
+            calls.append(commands)
+            return {"kind": "rpc_ok"}
+
+        async def fake_images():
+            return []
+
+        outcomes = iter(
+            [
+                None,
+                {
+                    "image_id": 22,
+                    "x": 100.0,
+                    "y": 200.0,
+                    "z": 0.0,
+                    "distance_from_target_mm": 0,
+                },
+            ]
+        )
+
+        async def fake_wait_for_grid_image(**_kwargs):
+            return next(outcomes)
+
+        manager.async_rpc_request = fake_rpc
+        manager.api.async_get_images = fake_images
+        manager._wait_for_grid_image = fake_wait_for_grid_image
+        firmware = {
+            "movement_axis_nr_steps_x": 600000,
+            "movement_axis_nr_steps_y": 300000,
+            "movement_axis_nr_steps_z": 100000,
+            "movement_step_per_mm_x": 100,
+            "movement_step_per_mm_y": 100,
+            "movement_step_per_mm_z": 100,
+        }
+        repair_id = manager.start_grid_repair(
+            targets=[{"x": 100, "y": 200, "z": 0}],
+            firmware_config=firmware,
+        )
+        await asyncio.gather(*manager._grid_repair_tasks)
+
+        repair = manager.grid_repair(repair_id)
+        assert repair["status"] == "complete"
+        assert repair["photo_attempt"] == 2
+        assert [[item["kind"] for item in command] for command in calls] == [
+            ["move"],
+            ["wait", "take_photo"],
+            ["wait", "take_photo"],
+            ["move"],
+        ]
+        await manager.async_close()
+
+    _run(scenario())
+
+
+def test_grid_repair_rejects_new_photo_taken_at_the_old_position():
+    async def scenario():
+        _, manager, _ = _make_manager()
+        now = dt_util.utcnow()
+
+        async def fake_images():
+            return [
+                {
+                    "id": 91,
+                    "device_id": 42,
+                    "created_at": now.isoformat(),
+                    "attachment_processed_at": now.isoformat(),
+                    "meta": {"x": 10, "y": 20, "z": 0},
+                },
+                {
+                    "id": 92,
+                    "device_id": 42,
+                    "created_at": now.isoformat(),
+                    "attachment_processed_at": now.isoformat(),
+                    "meta": {"x": 100, "y": 200, "z": 0},
+                },
+            ]
+
+        manager.api.async_get_images = fake_images
+        frame = await manager._wait_for_grid_image(
+            before=set(),
+            target={"x": 100.0, "y": 200.0, "z": 0.0},
+            started_at=now,
+            timeout=0.1,
+        )
+
+        assert frame["image_id"] == 92
+        assert frame["distance_from_target_mm"] == 0
         await manager.async_close()
 
     _run(scenario())

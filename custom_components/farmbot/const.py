@@ -29,8 +29,8 @@ VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
-INTEGRATION_VERSION = "2.0.0"
-VISION_CAPABILITIES = ["photo_grid_repair"]
+INTEGRATION_VERSION = "2.0.1"
+VISION_CAPABILITIES = ["photo_grid_repair", "verified_photo_grid_repair"]
 
 # Service names (existing)
 SERVICE_EXECUTE_SEQUENCE = "execute_sequence"
@@ -113,6 +113,13 @@ SOIL_POINT_STALE_DAYS = 14
 SOIL_RPC_TIMEOUT_SECONDS = 120
 SOIL_IMAGE_TIMEOUT_SECONDS = 180
 SOIL_CAPTURE_SETTLE_MILLISECONDS = 1500
+
+# Photo-grid repairs deliberately verify each capture through the REST API.
+# FarmBot's take_photo command reports camera failures asynchronously, so an
+# rpc_ok only proves the command was accepted, not that an image was created.
+GRID_REPAIR_IMAGE_TIMEOUT_SECONDS = 60
+GRID_REPAIR_MAX_PHOTO_ATTEMPTS = 3
+GRID_REPAIR_COORDINATE_TOLERANCE_MM = 25.0
 
 # Decompression-bomb guards applied to the *decoded* source image, before any
 # resize. A native FarmBot frame is 2592x1944 (~5 MP); these limits leave

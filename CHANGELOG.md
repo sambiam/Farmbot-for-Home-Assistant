@@ -3,6 +3,21 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.0.1 - 2026-07-27
+
+- **Fixed:** Photo-grid repair now sends each safe-Z movement as its own
+  acknowledged RPC before requesting a photo. A camera failure can no longer
+  let later targets run from a stale position and produce repeated images.
+- **Fixed:** A repair target is complete only after the FarmBot image API
+  contains a new processed image at the requested coordinates. This works
+  around FarmBot OS reporting `take_photo` failures asynchronously.
+- **Added:** Missing images are retried up to three times per repair request,
+  with attempt, target, verified frame and failure details exposed through the
+  existing repair-status service.
+- **Added:** The integration advertises `verified_photo_grid_repair`, allowing
+  the app to reject older repair implementations that cannot prove movement
+  and image success.
+
 ## 2.0.0 - 2026-07-27
 
 - **Fixed:** The integration now advertises its version and

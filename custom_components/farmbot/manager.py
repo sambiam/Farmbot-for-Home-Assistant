@@ -21,6 +21,9 @@ from .const import (
     DEFAULT_VISION_ENABLED,
     DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
     EVENT_VISION_REQUEST,
+    GRID_REPAIR_COORDINATE_TOLERANCE_MM,
+    GRID_REPAIR_IMAGE_TIMEOUT_SECONDS,
+    GRID_REPAIR_MAX_PHOTO_ATTEMPTS,
     MQTT_PORT,
     OPTION_VISION_ENABLED,
     OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES,
@@ -875,6 +878,9 @@ class FarmbotManager:
             "status": "queued",
             "message": "Photo-grid repair queued",
             "targets": normalized,
+            "frames": [],
+            "completed_targets": [],
+            "failed_targets": [],
             "created_at": dt_util.utcnow().isoformat(),
         }
         task = asyncio.create_task(
@@ -900,9 +906,27 @@ class FarmbotManager:
         final_status, final_message = "failed", "Photo-grid repair failed"
         async with self._soil_capture_lock:
             try:
-                commands = []
                 for target in targets:
-                    commands.extend(
+                    before = {
+                        int(item["id"])
+                        for item in await self.api.async_get_images()
+                        if isinstance(item, dict) and item.get("id") is not None
+                    }
+                    started_at = dt_util.utcnow()
+                    record.update(
+                        status="running",
+                        message=(
+                            "Moving safely to photo-grid cell "
+                            f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f}"
+                        ),
+                        started_at=record.get("started_at") or started_at.isoformat(),
+                        current_target=target,
+                    )
+                    # Movement is its own acknowledged RPC. Keeping take_photo
+                    # out of the same multi-command request prevents a camera
+                    # failure from allowing later targets to run at a stale
+                    # position, which previously produced repeated images.
+                    await self.async_rpc_request(
                         [
                             {
                                 "kind": "move",
@@ -911,24 +935,74 @@ class FarmbotManager:
                                     "speed": 100,
                                     "safe_z": True,
                                 },
-                            },
-                            {
-                                "kind": "wait",
-                                "args": {"milliseconds": SOIL_CAPTURE_SETTLE_MILLISECONDS},
-                            },
-                            {"kind": "take_photo", "args": {}},
-                        ]
+                            }
+                        ],
+                        timeout=SOIL_RPC_TIMEOUT_SECONDS,
                     )
-                record.update(
-                    status="running",
-                    message=f"Retaking {len(targets)} photo-grid image(s)",
-                    started_at=dt_util.utcnow().isoformat(),
-                )
-                await self.async_rpc_request(
-                    commands, timeout=max(SOIL_RPC_TIMEOUT_SECONDS, len(targets) * 45)
-                )
+                    frame = None
+                    for attempt in range(1, GRID_REPAIR_MAX_PHOTO_ATTEMPTS + 1):
+                        record.update(
+                            status="waiting_images",
+                            message=(
+                                f"Taking photo {len(record['frames']) + 1} of {len(targets)} "
+                                f"(camera attempt {attempt}/{GRID_REPAIR_MAX_PHOTO_ATTEMPTS})"
+                            ),
+                            photo_attempt=attempt,
+                        )
+                        try:
+                            await self.async_rpc_request(
+                                [
+                                    {
+                                        "kind": "wait",
+                                        "args": {"milliseconds": SOIL_CAPTURE_SETTLE_MILLISECONDS},
+                                    },
+                                    {"kind": "take_photo", "args": {}},
+                                ],
+                                timeout=SOIL_RPC_TIMEOUT_SECONDS,
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as err:  # pylint: disable=broad-except
+                            _LOGGER.warning(
+                                "Photo-grid repair %s photo RPC attempt %d/%d failed: %s",
+                                repair_id,
+                                attempt,
+                                GRID_REPAIR_MAX_PHOTO_ATTEMPTS,
+                                err,
+                            )
+                            continue
+                        frame = await self._wait_for_grid_image(
+                            before=before,
+                            target=target,
+                            started_at=started_at,
+                            timeout=GRID_REPAIR_IMAGE_TIMEOUT_SECONDS,
+                        )
+                        if frame is not None:
+                            break
+                        _LOGGER.warning(
+                            "Photo-grid repair %s got no processed image at "
+                            "X %.1f Y %.1f Z %.1f on attempt %d/%d",
+                            repair_id,
+                            target["x"],
+                            target["y"],
+                            target["z"],
+                            attempt,
+                            GRID_REPAIR_MAX_PHOTO_ATTEMPTS,
+                        )
+                    if frame is None:
+                        record["failed_targets"].append(target)
+                        raise TimeoutError(
+                            "FarmBot did not produce a processed image at "
+                            f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f} "
+                            f"after {GRID_REPAIR_MAX_PHOTO_ATTEMPTS} attempts"
+                        )
+                    record["frames"].append(frame)
+                    record["completed_targets"].append(target)
                 final_status = "complete"
-                final_message = f"Retook {len(targets)} photo-grid image(s)"
+                final_message = (
+                    f"Verified {len(record['frames'])} photo-grid image(s) at "
+                    "the requested coordinates"
+                )
             except Exception as err:  # pylint: disable=broad-except
                 _LOGGER.warning("Photo-grid repair %s failed: %s", repair_id, err)
                 final_message = str(err)[:240] or final_message
@@ -962,6 +1036,64 @@ class FarmbotManager:
                     message=final_message,
                     completed_at=dt_util.utcnow().isoformat(),
                 )
+
+    async def _wait_for_grid_image(
+        self,
+        *,
+        before: set[int],
+        target: dict[str, float],
+        started_at,
+        timeout: float,
+    ) -> dict[str, Any] | None:
+        """Return a new processed image only when it matches the target cell.
+
+        ``take_photo`` failures are out-of-band in FarmBot OS. Polling the
+        image API is therefore the success signal; checking coordinates also
+        rejects the repeated-at-the-old-position failure mode.
+        """
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            images = await self.api.async_get_images()
+            matches: list[tuple[float, dict[str, Any]]] = []
+            for image in images:
+                if not isinstance(image, dict) or not vision.is_image_ready(image):
+                    continue
+                try:
+                    image_id = int(image["id"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if image_id in before or not vision.same_device(
+                    image.get("device_id"), self.device_id
+                ):
+                    continue
+                created = dt_util.parse_datetime(str(image.get("created_at") or ""))
+                if created is not None:
+                    try:
+                        if created < started_at:
+                            continue
+                    except TypeError:
+                        continue
+                meta = self._image_meta(image)
+                try:
+                    distance = math.sqrt(
+                        sum((float(meta[axis]) - target[axis]) ** 2 for axis in ("x", "y", "z"))
+                    )
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if distance <= GRID_REPAIR_COORDINATE_TOLERANCE_MM:
+                    matches.append((distance, image))
+            if matches:
+                distance, image = min(matches, key=lambda item: item[0])
+                meta = self._image_meta(image)
+                return {
+                    "image_id": int(image["id"]),
+                    "x": float(meta["x"]),
+                    "y": float(meta["y"]),
+                    "z": float(meta.get("z") or 0),
+                    "distance_from_target_mm": distance,
+                }
+            await asyncio.sleep(2)
+        return None
 
     def grid_repair(self, repair_id: str) -> dict[str, Any] | None:
         record = self.grid_repairs.get(repair_id)
