@@ -3,6 +3,23 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.0.2 - 2026-07-27
+
+- **Fixed:** Modern FarmBot `move` commands now place X/Y/Z in
+  `axis_overwrite` nodes in the CeleryScript body. The previous payload put
+  coordinates in `move.args`, which FarmBot OS accepts but ignores, resulting
+  in a successful no-op followed by a photo at the old position.
+- **Safety:** Photo-grid repair now requires a fresh FarmBot status broadcast
+  after movement and requires the reported X/Y/Z to be within 5 mm of the
+  target. If the bot did not move, no photo is requested and the failure
+  reports both requested and observed coordinates.
+- **Fixed:** Soil capture, position restore, and the general `move_to` service
+  now use the same valid modern movement AST.
+- **Changed:** Camera capture permits six failed attempts per cell before
+  reporting that cell as failed so the app can continue with the next one.
+- **Added:** Advertises `position_verified_photo_grid_repair` so the app can
+  require this corrected movement implementation.
+
 ## 2.0.1 - 2026-07-27
 
 - **Fixed:** Photo-grid repair now sends each safe-Z movement as its own

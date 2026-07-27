@@ -24,6 +24,8 @@ from .const import (
     GRID_REPAIR_COORDINATE_TOLERANCE_MM,
     GRID_REPAIR_IMAGE_TIMEOUT_SECONDS,
     GRID_REPAIR_MAX_PHOTO_ATTEMPTS,
+    GRID_REPAIR_POSITION_TIMEOUT_SECONDS,
+    GRID_REPAIR_POSITION_TOLERANCE_MM,
     MQTT_PORT,
     OPTION_VISION_ENABLED,
     OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES,
@@ -93,6 +95,7 @@ class FarmbotManager:
         self.device_id = str(device_id).strip()  # 'device_<id>' or numeric
         self.mqtt_host_raw = str(mqtt_host).strip()  # must come from token.unencoded.mqtt
         self.status: dict = {}
+        self._status_revision = 0
         self.device_name = f"FarmBot {self.device_id}"
         self.entry_id: Optional[str] = (
             getattr(entry, "entry_id", None) if entry is not None else None
@@ -344,6 +347,7 @@ class FarmbotManager:
         if msg.topic == TOPIC_STATUS.format(device_id=self.device_id):
             state = payload.get("body", payload) or {}
             self.status = state
+            self._status_revision += 1
             # Paho callback thread -> HA loop:
             self.hass.loop.call_soon_threadsafe(
                 async_dispatcher_send, self.hass, SIGNAL_STATE, self.status
@@ -468,15 +472,14 @@ class FarmbotManager:
         async_dispatcher_send(self.hass, SIGNAL_SEQUENCE_SELECTED, seq)
 
     def move_to(self, x=None, y=None, z=None, speed=100):
-        args = {}
-        if x is not None:
-            args["x"] = float(x)
-        if y is not None:
-            args["y"] = float(y)
-        if z is not None:
-            args["z"] = float(z)
-        args["speed"] = int(speed)
-        cs = [{"kind": "move", "args": args}]
+        cs = [
+            self._move_command(
+                x=None if x is None else float(x),
+                y=None if y is None else float(y),
+                z=None if z is None else float(z),
+                speed=int(speed),
+            )
+        ]
         self.send_rpc_request(cs)
 
     def get_pin_value(self, pin: int):
@@ -493,6 +496,57 @@ class FarmbotManager:
         return None
 
     # -------------------- Soil-height capture --------------------
+
+    @staticmethod
+    def _move_command(
+        *,
+        x: float | None = None,
+        y: float | None = None,
+        z: float | None = None,
+        speed: int = 100,
+        safe_z: bool = False,
+    ) -> dict[str, Any]:
+        """Build the modern FarmBot ``move`` CeleryScript AST.
+
+        FarmBot OS reads coordinates from ``axis_overwrite`` nodes in the
+        command body. Putting X/Y/Z in ``move.args`` is accepted but ignored,
+        producing a successful no-op RPC.
+        """
+        coordinates = {"x": x, "y": y, "z": z}
+        body: list[dict[str, Any]] = []
+        for axis, value in coordinates.items():
+            if value is None:
+                continue
+            body.append(
+                {
+                    "kind": "axis_overwrite",
+                    "args": {
+                        "axis": axis,
+                        "axis_operand": {
+                            "kind": "numeric",
+                            "args": {"number": float(value)},
+                        },
+                    },
+                }
+            )
+        for axis, value in coordinates.items():
+            if value is None:
+                continue
+            body.append(
+                {
+                    "kind": "speed_overwrite",
+                    "args": {
+                        "axis": axis,
+                        "speed_setting": {
+                            "kind": "numeric",
+                            "args": {"number": int(speed)},
+                        },
+                    },
+                }
+            )
+        if safe_z:
+            body.append({"kind": "safe_z", "args": {}})
+        return {"kind": "move", "args": {}, "body": body}
 
     @staticmethod
     def is_soil_height_point(point: object) -> bool:
@@ -582,16 +636,13 @@ class FarmbotManager:
                 frame_y = y + lateral
                 commands.extend(
                     [
-                        {
-                            "kind": "move",
-                            "args": {
-                                "x": x,
-                                "y": frame_y,
-                                "z": z,
-                                "speed": 100,
-                                "safe_z": True,
-                            },
-                        },
+                        FarmbotManager._move_command(
+                            x=x,
+                            y=frame_y,
+                            z=z,
+                            speed=100,
+                            safe_z=True,
+                        ),
                         {
                             "kind": "wait",
                             "args": {"milliseconds": SOIL_CAPTURE_SETTLE_MILLISECONDS},
@@ -727,17 +778,14 @@ class FarmbotManager:
                     try:
                         await self.async_rpc_request(
                             [
-                                {
-                                    "kind": "move",
-                                    "args": {
-                                        **{
-                                            axis: float(original_position[axis])
-                                            for axis in ("x", "y", "z")
-                                        },
-                                        "speed": 100,
-                                        "safe_z": True,
+                                self._move_command(
+                                    **{
+                                        axis: float(original_position[axis])
+                                        for axis in ("x", "y", "z")
                                     },
-                                }
+                                    speed=100,
+                                    safe_z=True,
+                                )
                             ],
                             timeout=60,
                         )
@@ -928,16 +976,46 @@ class FarmbotManager:
                     # position, which previously produced repeated images.
                     await self.async_rpc_request(
                         [
-                            {
-                                "kind": "move",
-                                "args": {
-                                    **target,
-                                    "speed": 100,
-                                    "safe_z": True,
-                                },
-                            }
+                            self._move_command(
+                                **target,
+                                speed=100,
+                                safe_z=True,
+                            )
                         ],
                         timeout=SOIL_RPC_TIMEOUT_SECONDS,
+                    )
+                    reported_position = await self._wait_for_grid_position(
+                        target=target,
+                        timeout=GRID_REPAIR_POSITION_TIMEOUT_SECONDS,
+                    )
+                    record["reported_position"] = reported_position or self._reported_position()
+                    if reported_position is None:
+                        observed = record["reported_position"]
+                        record["movement_failure"] = {
+                            "requested_target": target,
+                            "reported_position": observed,
+                        }
+                        record["failed_targets"].append(target)
+                        observed_text = (
+                            "unavailable"
+                            if observed is None
+                            else (
+                                f"X {observed['x']:.1f}, Y {observed['y']:.1f}, "
+                                f"Z {observed['z']:.1f}"
+                            )
+                        )
+                        raise RuntimeError(
+                            "FarmBot did not reach the requested photo-grid cell "
+                            f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f}; "
+                            f"last live position was {observed_text}. No photo was requested."
+                        )
+                    record.update(
+                        message=(
+                            "FarmBot position confirmed at "
+                            f"X {reported_position['x']:.1f}, "
+                            f"Y {reported_position['y']:.1f}, "
+                            f"Z {reported_position['z']:.1f}"
+                        )
                     )
                     frame = None
                     for attempt in range(1, GRID_REPAIR_MAX_PHOTO_ATTEMPTS + 1):
@@ -1011,17 +1089,14 @@ class FarmbotManager:
                     try:
                         await self.async_rpc_request(
                             [
-                                {
-                                    "kind": "move",
-                                    "args": {
-                                        **{
-                                            axis: float(original_position[axis])
-                                            for axis in ("x", "y", "z")
-                                        },
-                                        "speed": 100,
-                                        "safe_z": True,
+                                self._move_command(
+                                    **{
+                                        axis: float(original_position[axis])
+                                        for axis in ("x", "y", "z")
                                     },
-                                }
+                                    speed=100,
+                                    safe_z=True,
+                                )
                             ],
                             timeout=60,
                         )
@@ -1036,6 +1111,57 @@ class FarmbotManager:
                     message=final_message,
                     completed_at=dt_util.utcnow().isoformat(),
                 )
+
+    def _reported_position(self) -> dict[str, float] | None:
+        position = (self.status or {}).get("location_data", {}).get("position") or {}
+        try:
+            normalized = {axis: float(position[axis]) for axis in ("x", "y", "z")}
+        except (KeyError, TypeError, ValueError):
+            return None
+        return normalized if all(math.isfinite(value) for value in normalized.values()) else None
+
+    async def _wait_for_grid_position(
+        self,
+        *,
+        target: dict[str, float],
+        timeout: float,
+    ) -> dict[str, float] | None:
+        """Confirm FarmBot's live status reached a target before photography."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return None
+            previous_revision = self._status_revision
+            try:
+                # read_status is also out-of-band: the RPC acknowledgement
+                # triggers a fresh status broadcast which updates self.status.
+                await self.async_rpc_request(
+                    [{"kind": "read_status", "args": {}}],
+                    timeout=min(10, remaining),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.debug("Could not refresh FarmBot position during grid repair: %s", err)
+            while (
+                self._status_revision <= previous_revision
+                and (remaining := deadline - asyncio.get_running_loop().time()) > 0
+            ):
+                await asyncio.sleep(min(0.1, remaining))
+            if self._status_revision <= previous_revision:
+                return None
+            position = self._reported_position()
+            if position is not None:
+                distance = math.sqrt(
+                    sum((position[axis] - target[axis]) ** 2 for axis in ("x", "y", "z"))
+                )
+                if distance <= GRID_REPAIR_POSITION_TOLERANCE_MM:
+                    return position
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return None
+            await asyncio.sleep(min(1, remaining))
 
     async def _wait_for_grid_image(
         self,

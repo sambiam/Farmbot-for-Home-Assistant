@@ -123,10 +123,43 @@ def test_soil_capture_commands_include_safe_moves_waits_and_photos():
     assert len(frames) == 6
     assert len(commands) == 18
     assert commands[0]["kind"] == "move"
-    assert commands[0]["args"]["safe_z"] is True
+    assert commands[0]["args"] == {}
+    assert commands[0]["body"][-1] == {"kind": "safe_z", "args": {}}
+    overwrites = {
+        item["args"]["axis"]: item["args"]["axis_operand"]["args"]["number"]
+        for item in commands[0]["body"]
+        if item["kind"] == "axis_overwrite"
+    }
+    assert overwrites == {"x": 100.0, "y": 185.0, "z": 0.0}
     assert commands[1] == {"kind": "wait", "args": {"milliseconds": 1500}}
     assert commands[2] == {"kind": "take_photo", "args": {}}
     assert frames[-1]["z"] == -25
+
+
+def test_move_command_puts_coordinates_in_farmbot_move_body():
+    command = FarmbotManager._move_command(
+        x=302.1,
+        y=451.0,
+        z=-1.2,
+        speed=75,
+        safe_z=True,
+    )
+
+    assert command["kind"] == "move"
+    assert command["args"] == {}
+    assert command["body"][-1] == {"kind": "safe_z", "args": {}}
+    overwrites = {
+        item["args"]["axis"]: item["args"]["axis_operand"]["args"]["number"]
+        for item in command["body"]
+        if item["kind"] == "axis_overwrite"
+    }
+    speeds = {
+        item["args"]["axis"]: item["args"]["speed_setting"]["args"]["number"]
+        for item in command["body"]
+        if item["kind"] == "speed_overwrite"
+    }
+    assert overwrites == {"x": 302.1, "y": 451.0, "z": -1.2}
+    assert speeds == {"x": 75, "y": 75, "z": 75}
 
 
 def test_only_one_soil_capture_can_be_queued_per_bot():

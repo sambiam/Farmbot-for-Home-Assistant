@@ -3,7 +3,7 @@
 A custom integration to control your FarmBot via MQTT & HTTP API, and a secure
 bridge to a separate **FarmBot Vision** companion app.
 
-> **Prerelease note:** Version 2.0.1 is a prerelease intended for testing with
+> **Prerelease note:** Version 2.0.2 is a prerelease intended for testing with
 > Home Assistant Core **2026.7.x**. It has not been validated against other
 > Home Assistant versions, so broader compatibility is not currently claimed.
 
