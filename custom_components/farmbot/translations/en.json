@@ -206,6 +206,20 @@
         }
       }
     },
+    "delete_vision_image": {
+      "name": "Delete Vision image",
+      "description": "Permanently delete one image owned by this FarmBot. Used to retire a photo-grid frame that a repair has already replaced with a better photo of the same cell.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot that owns the image."
+        },
+        "image_id": {
+          "name": "Image ID",
+          "description": "FarmBot image ID to delete."
+        }
+      }
+    },
     "apply_vision_soil_height": {
       "name": "Apply Vision soil height",
       "description": "Revalidate and replace a stale soil point with a reviewed clear-soil X, Y and Z measurement.",

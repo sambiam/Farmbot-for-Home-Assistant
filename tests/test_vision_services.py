@@ -26,6 +26,7 @@ from custom_components.farmbot import (
     SERVICE_APPLY_VISION_REMOVAL,
     SERVICE_APPLY_VISION_SOIL_HEIGHT,
     SERVICE_CREATE_VISION_WEED,
+    SERVICE_DELETE_VISION_IMAGE,
     SERVICE_EXECUTE_SEQUENCE,
     SERVICE_GET_VISION_GRID_REPAIR,
     SERVICE_GET_VISION_IMAGE,
@@ -628,15 +629,50 @@ def test_start_grid_repair_accepts_app_payload_and_is_pollable():
     assert polled["status"] == "queued"
 
 
+def test_delete_vision_image_removes_an_owned_image():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass, device_id="42")
+    manager.api.images[5] = _image_record(5)
+    _async_register_services(hass)
+    result = _run(
+        _call(hass, SERVICE_DELETE_VISION_IMAGE, {"config_entry_id": "entry-1", "image_id": 5})
+    )
+    assert result["status"] == "deleted"
+    assert 5 not in manager.api.images
+
+
+def test_delete_vision_image_rejects_another_farmbots_image():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass, device_id="42")
+    manager.api.images[5] = _image_record(5, device_id="99")
+    _async_register_services(hass)
+    result = _run(
+        _call(hass, SERVICE_DELETE_VISION_IMAGE, {"config_entry_id": "entry-1", "image_id": 5})
+    )
+    assert result["status"] == "rejected"
+    assert 5 in manager.api.images
+
+
+def test_delete_vision_image_treats_an_absent_image_as_deleted():
+    hass = FakeHass()
+    _make_bot(hass)
+    _async_register_services(hass)
+    result = _run(
+        _call(hass, SERVICE_DELETE_VISION_IMAGE, {"config_entry_id": "entry-1", "image_id": 999})
+    )
+    assert result["status"] == "deleted"
+
+
 def test_list_bots_advertises_grid_repair_capability():
     hass = FakeHass()
     _make_bot(hass)
     _async_register_services(hass)
     result = _run(_call(hass, SERVICE_LIST_VISION_BOTS, {}))
-    assert result["bots"][0]["integration_version"] == "2.0.2"
+    assert result["bots"][0]["integration_version"] == "2.1.0"
     assert "photo_grid_repair" in result["bots"][0]["capabilities"]
     assert "verified_photo_grid_repair" in result["bots"][0]["capabilities"]
     assert "position_verified_photo_grid_repair" in result["bots"][0]["capabilities"]
+    assert "vision_image_deletion" in result["bots"][0]["capabilities"]
 
 
 def test_apply_soil_height_requires_approval_and_detects_stale_point():

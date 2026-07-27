@@ -409,6 +409,20 @@ class FarmbotApiClient:
             return None
         return data if isinstance(data, dict) else None
 
+    async def async_delete_image(self, image_id: int) -> dict:
+        """Permanently delete an image from the FarmBot API.
+
+        Used only to retire a photo the Vision app has replaced with a better
+        one at the same coordinates (a gantry-obscured photo-grid cell), so
+        the stale frame can never be re-detected as that cell's image.
+        """
+        data = await self._request_json(
+            "DELETE",
+            f"/images/{int(image_id)}",
+            idempotent=False,
+        )
+        return data if isinstance(data, dict) else {}
+
     async def async_download_image(self, attachment_url: str) -> tuple[bytes, str]:
         """Download raw image bytes for an already-resolved attachment URL.
 

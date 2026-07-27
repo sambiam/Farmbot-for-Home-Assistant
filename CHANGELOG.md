@@ -3,6 +3,18 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.1.0 - 2026-07-27
+
+- **Added:** `farmbot.delete_vision_image` deletes a single image owned by the
+  selected FarmBot. The Vision app uses it to retire a gantry-obscured
+  photo-grid frame once a usable photo of the same cell has replaced it, so
+  the superseded photo can never be detected as that cell's image again.
+  Ownership is checked against the config entry's device exactly as
+  `get_vision_image` does, and an image that is already gone is reported as
+  deleted so a retry is safe.
+- **Added:** Advertises the `vision_image_deletion` capability so the app can
+  detect whether deletion is available before relying on it.
+
 ## 2.0.2 - 2026-07-27
 
 - **Fixed:** Modern FarmBot `move` commands now place X/Y/Z in

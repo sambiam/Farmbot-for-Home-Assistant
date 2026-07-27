@@ -29,11 +29,12 @@ VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
-INTEGRATION_VERSION = "2.0.2"
+INTEGRATION_VERSION = "2.1.0"
 VISION_CAPABILITIES = [
     "photo_grid_repair",
     "verified_photo_grid_repair",
     "position_verified_photo_grid_repair",
+    "vision_image_deletion",
 ]
 
 # Service names (existing)
@@ -49,6 +50,7 @@ SERVICE_START_VISION_SOIL_CAPTURE = "start_vision_soil_capture"
 SERVICE_GET_VISION_SOIL_CAPTURE = "get_vision_soil_capture"
 SERVICE_START_VISION_GRID_REPAIR = "start_vision_grid_repair"
 SERVICE_GET_VISION_GRID_REPAIR = "get_vision_grid_repair"
+SERVICE_DELETE_VISION_IMAGE = "delete_vision_image"
 SERVICE_APPLY_VISION_SOIL_HEIGHT = "apply_vision_soil_height"
 SERVICE_APPLY_VISION_RADIUS = "apply_vision_radius"
 SERVICE_APPLY_VISION_REMOVAL = "apply_vision_removal"

@@ -82,6 +82,11 @@ class FakeVisionApi:
         self._record("async_get_image")
         return self.images.get(image_id)
 
+    async def async_delete_image(self, image_id):
+        self._record("async_delete_image")
+        self.images.pop(image_id, None)
+        return {}
+
     async def async_get_point(self, point_id):
         self._record("async_get_point")
         return self.points.get(point_id)

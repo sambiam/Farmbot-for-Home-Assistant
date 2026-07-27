@@ -183,6 +183,21 @@ get_vision_grid_repair:
       selector:
         text:
 
+delete_vision_image:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    image_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 100000000
+          mode: box
+
 apply_vision_soil_height:
   fields:
     config_entry_id:

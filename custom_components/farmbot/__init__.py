@@ -38,6 +38,7 @@ from .const import (
     SERVICE_APPLY_VISION_REMOVAL,
     SERVICE_APPLY_VISION_SOIL_HEIGHT,
     SERVICE_CREATE_VISION_WEED,
+    SERVICE_DELETE_VISION_IMAGE,
     SERVICE_EXECUTE_SEQUENCE,
     SERVICE_GET_VISION_GRID_REPAIR,
     SERVICE_GET_VISION_IMAGE,
@@ -196,6 +197,13 @@ SERVICE_GET_VISION_GRID_REPAIR_SCHEMA = vol.Schema(
     {
         vol.Required("config_entry_id"): cv.string,
         vol.Required("repair_id"): _cv_uuid,
+    }
+)
+
+SERVICE_DELETE_VISION_IMAGE_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("image_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
     }
 )
 
@@ -770,6 +778,41 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if repair is None:
             return {"status": "failed", "message": "Photo-grid repair was not found"}
         return repair
+
+    async def delete_vision_image(call: ServiceCall) -> dict:
+        """Delete one image this FarmBot owns.
+
+        The Vision app calls this only after a photo-grid cell has been
+        re-photographed, so the superseded frame (a gantry-obscured cell)
+        cannot be picked up again as that cell's image. Ownership is checked
+        against this config entry's device exactly as get_vision_image does,
+        and an already-absent image is reported as deleted so a retry is safe.
+        """
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        image_id = call.data["image_id"]
+        image = await _safe_api_call(
+            manager,
+            manager.api.async_get_image(image_id),
+            context="fetch image metadata for deletion",
+        )
+        if image is None:
+            return {
+                "status": "deleted",
+                "image_id": image_id,
+                "message": "Image was already absent",
+            }
+        if not vision.same_device(image.get("device_id"), manager.device_id):
+            return {
+                "status": "rejected",
+                "image_id": image_id,
+                "message": "Image belongs to another FarmBot",
+            }
+        await _safe_api_call(
+            manager,
+            manager.api.async_delete_image(image_id),
+            context="delete image",
+        )
+        return {"status": "deleted", "image_id": image_id, "message": "Image deleted"}
 
     async def apply_vision_soil_height(call: ServiceCall) -> dict:
         """Relocate a stale soil point after concurrency and approval checks."""
@@ -1379,6 +1422,13 @@ def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        SERVICE_DELETE_VISION_IMAGE,
+        _vision_response_service(delete_vision_image),
+        schema=SERVICE_DELETE_VISION_IMAGE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_APPLY_VISION_SOIL_HEIGHT,
         _vision_response_service(apply_vision_soil_height),
         schema=SERVICE_APPLY_VISION_SOIL_HEIGHT_SCHEMA,
@@ -1462,6 +1512,7 @@ def _async_remove_services_if_last_entry(hass: HomeAssistant) -> None:
         SERVICE_GET_VISION_SOIL_CAPTURE,
         SERVICE_START_VISION_GRID_REPAIR,
         SERVICE_GET_VISION_GRID_REPAIR,
+        SERVICE_DELETE_VISION_IMAGE,
         SERVICE_APPLY_VISION_SOIL_HEIGHT,
         SERVICE_APPLY_VISION_RADIUS,
         SERVICE_APPLY_VISION_REMOVAL,
