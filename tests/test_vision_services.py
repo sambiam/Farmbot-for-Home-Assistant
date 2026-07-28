@@ -5,6 +5,7 @@ through FakeHass.services.async_call, with FarmbotManager.api swapped for
 a FakeVisionApi double so no network access occurs. MQTT is never touched
 (connect_mqtt/disconnect_mqtt are not called by these tests).
 """
+
 import asyncio
 import base64
 import logging
@@ -60,7 +61,9 @@ def _run(coro):
 
 def _make_bot(hass, entry_id="entry-1", device_id="42", options=None):
     entry = ConfigEntry(
-        entry_id=entry_id, unique_id=device_id, domain="farmbot",
+        entry_id=entry_id,
+        unique_id=device_id,
+        domain="farmbot",
         data={"token": "tok", "device_id": device_id, "mqtt_host": "mqtt.example.com"},
         options=options or {},
     )
@@ -76,17 +79,26 @@ async def _call(hass, service, data):
 
 # --------------------------- service registration / removal ---------------------------
 
+
 def test_registers_all_services_with_one_entry():
     hass = FakeHass()
     _async_register_services(hass)
     for service in (
-        SERVICE_EXECUTE_SEQUENCE, SERVICE_MOVE_TO, SERVICE_LIST_VISION_BOTS,
-        SERVICE_GET_VISION_INVENTORY, SERVICE_GET_VISION_IMAGE, SERVICE_APPLY_VISION_RADIUS,
+        SERVICE_EXECUTE_SEQUENCE,
+        SERVICE_MOVE_TO,
+        SERVICE_LIST_VISION_BOTS,
+        SERVICE_GET_VISION_INVENTORY,
+        SERVICE_GET_VISION_IMAGE,
+        SERVICE_APPLY_VISION_RADIUS,
         SERVICE_APPLY_VISION_REMOVAL,
-        SERVICE_APPLY_VISION_PLANT_CENTER, SERVICE_CREATE_VISION_WEED,
-        SERVICE_GET_VISION_SOIL_POINTS, SERVICE_START_VISION_SOIL_CAPTURE,
-        SERVICE_GET_VISION_SOIL_CAPTURE, SERVICE_APPLY_VISION_SOIL_HEIGHT,
-        SERVICE_UPSERT_VISION_SPREAD_CURVE, SERVICE_REPORT_VISION_STATUS,
+        SERVICE_APPLY_VISION_PLANT_CENTER,
+        SERVICE_CREATE_VISION_WEED,
+        SERVICE_GET_VISION_SOIL_POINTS,
+        SERVICE_START_VISION_SOIL_CAPTURE,
+        SERVICE_GET_VISION_SOIL_CAPTURE,
+        SERVICE_APPLY_VISION_SOIL_HEIGHT,
+        SERVICE_UPSERT_VISION_SPREAD_CURVE,
+        SERVICE_REPORT_VISION_STATUS,
         SERVICE_REQUEST_VISION_ANALYSIS,
     ):
         assert hass.services.has_service(DOMAIN, service)
@@ -107,11 +119,16 @@ def test_removes_all_services_after_final_entry_unloads():
     del hass.data[DOMAIN]["entry-1"]
     _async_remove_services_if_last_entry(hass)
     for service in (
-        SERVICE_LIST_VISION_BOTS, SERVICE_GET_VISION_INVENTORY, SERVICE_GET_VISION_IMAGE,
-        SERVICE_APPLY_VISION_RADIUS, SERVICE_UPSERT_VISION_SPREAD_CURVE,
+        SERVICE_LIST_VISION_BOTS,
+        SERVICE_GET_VISION_INVENTORY,
+        SERVICE_GET_VISION_IMAGE,
+        SERVICE_APPLY_VISION_RADIUS,
+        SERVICE_UPSERT_VISION_SPREAD_CURVE,
         SERVICE_APPLY_VISION_REMOVAL,
-        SERVICE_APPLY_VISION_PLANT_CENTER, SERVICE_CREATE_VISION_WEED,
-        SERVICE_REPORT_VISION_STATUS, SERVICE_REQUEST_VISION_ANALYSIS,
+        SERVICE_APPLY_VISION_PLANT_CENTER,
+        SERVICE_CREATE_VISION_WEED,
+        SERVICE_REPORT_VISION_STATUS,
+        SERVICE_REQUEST_VISION_ANALYSIS,
     ):
         assert not hass.services.has_service(DOMAIN, service)
 
@@ -127,6 +144,7 @@ def test_services_remain_while_a_second_entry_is_still_loaded():
 
 
 # --------------------------- list_vision_bots ---------------------------
+
 
 def test_list_vision_bots_without_credentials():
     hass = FakeHass()
@@ -145,6 +163,7 @@ def test_list_vision_bots_without_credentials():
 
 # --------------------------- get_vision_inventory ---------------------------
 
+
 def test_get_vision_inventory_filters_plants_images_and_curves():
     hass = FakeHass()
     manager, _entry = _make_bot(hass)
@@ -155,25 +174,46 @@ def test_get_vision_inventory_filters_plants_images_and_curves():
     manager.api = FakeVisionApi(
         points=[
             {
-                "id": 1, "device_id": "42", "pointer_type": "Plant", "plant_stage": "planted",
-                "discarded_at": None, "radius": 100, "spread_curve_id": 5, "name": "Tomato",
-                "x": 1, "y": 2, "z": 0, "openfarm_slug": "tomato", "planted_at": recent,
+                "id": 1,
+                "device_id": "42",
+                "pointer_type": "Plant",
+                "plant_stage": "planted",
+                "discarded_at": None,
+                "radius": 100,
+                "spread_curve_id": 5,
+                "name": "Tomato",
+                "x": 1,
+                "y": 2,
+                "z": 0,
+                "openfarm_slug": "tomato",
+                "planted_at": recent,
             },
             {"id": 2, "device_id": "42", "pointer_type": "Plant", "plant_stage": "harvested"},
         ],
         images=[
             {
-                "id": 10, "device_id": "42", "created_at": recent,
-                "attachment_processed_at": recent, "meta": {"x": 1, "y": 2, "z": 0},
+                "id": 10,
+                "device_id": "42",
+                "created_at": recent,
+                "attachment_processed_at": recent,
+                "meta": {"x": 1, "y": 2, "z": 0},
                 "attachment_url": "https://x/1.jpg",
             },
             {
-                "id": 11, "device_id": "42", "created_at": old, "attachment_processed_at": old,
-                "meta": {}, "attachment_url": "https://x/2.jpg",
+                "id": 11,
+                "device_id": "42",
+                "created_at": old,
+                "attachment_processed_at": old,
+                "meta": {},
+                "attachment_url": "https://x/2.jpg",
             },
             {
-                "id": 12, "device_id": "42", "created_at": recent,
-                "attachment_processed_at": None, "meta": {}, "attachment_url": "https://x/3.jpg",
+                "id": 12,
+                "device_id": "42",
+                "created_at": recent,
+                "attachment_processed_at": None,
+                "meta": {},
+                "attachment_url": "https://x/3.jpg",
             },
         ],
         curves=[
@@ -201,10 +241,13 @@ def test_get_vision_inventory_include_all_curves():
     )
     _async_register_services(hass)
 
-    result = _run(_call(
-        hass, SERVICE_GET_VISION_INVENTORY,
-        {"config_entry_id": "entry-1", "include_all_curves": True},
-    ))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_GET_VISION_INVENTORY,
+            {"config_entry_id": "entry-1", "include_all_curves": True},
+        )
+    )
     assert [c["id"] for c in result["curves"]] == [1]
 
 
@@ -239,10 +282,14 @@ def test_get_vision_inventory_normalizes_camera_calibration():
 
 # --------------------------- get_vision_image ---------------------------
 
+
 def _image_record(image_id, **overrides):
     base = {
-        "id": image_id, "device_id": "42", "attachment_processed_at": "2026-07-17T00:00:00Z",
-        "attachment_url": "https://x/img.jpg", "created_at": "2026-07-17T00:00:00Z",
+        "id": image_id,
+        "device_id": "42",
+        "attachment_processed_at": "2026-07-17T00:00:00Z",
+        "attachment_url": "https://x/img.jpg",
+        "created_at": "2026-07-17T00:00:00Z",
         "meta": {"x": 1, "y": 2, "z": 3},
     }
     base.update(overrides)
@@ -285,9 +332,9 @@ def test_get_vision_image_returns_resized_base64_jpeg_without_leaking_secrets(ca
     _async_register_services(hass)
 
     caplog.set_level(logging.DEBUG)
-    result = _run(_call(
-        hass, SERVICE_GET_VISION_IMAGE, {"config_entry_id": "entry-1", "image_id": 5}
-    ))
+    result = _run(
+        _call(hass, SERVICE_GET_VISION_IMAGE, {"config_entry_id": "entry-1", "image_id": 5})
+    )
 
     assert result["content_type"] == "image/jpeg"
     assert result["width"] <= 640
@@ -314,9 +361,7 @@ def test_get_vision_image_returns_resized_base64_jpeg_without_leaking_secrets(ca
     assert result["sha256"] != result["source_sha256"]
 
     # No calibration configured on the fake -> processed calibration unavailable.
-    assert result["processed_calibration"] == {
-        "available": False, "basis": "processed_image"
-    }
+    assert result["processed_calibration"] == {"available": False, "basis": "processed_image"}
 
     for record in caplog.records:
         message = record.getMessage()
@@ -332,9 +377,9 @@ def test_get_vision_image_includes_processed_calibration_when_available():
     manager.api.download_bytes = _make_jpeg_bytes(size=(2592, 1944))
     manager.api.calibration = {
         "available": True,
-        "coord_scale": 0.8130081,          # -> ~1.23 px/mm
-        "center_pixel_location_x": 1296,   # -> reference_width 2592
-        "center_pixel_location_y": 972,    # -> reference_height 1944
+        "coord_scale": 0.8130081,  # -> ~1.23 px/mm
+        "center_pixel_location_x": 1296,  # -> reference_width 2592
+        "center_pixel_location_y": 972,  # -> reference_height 1944
         "camera_z": 300.0,
         "total_rotation_angle": 0.0,
         "camera_offset_x": 0.0,
@@ -342,10 +387,13 @@ def test_get_vision_image_includes_processed_calibration_when_available():
     }
     _async_register_services(hass)
 
-    result = _run(_call(
-        hass, SERVICE_GET_VISION_IMAGE,
-        {"config_entry_id": "entry-1", "image_id": 5, "max_width": 960, "max_height": 720},
-    ))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_GET_VISION_IMAGE,
+            {"config_entry_id": "entry-1", "image_id": 5, "max_width": 960, "max_height": 720},
+        )
+    )
 
     assert result["width"] == 960
     assert result["height"] == 720
@@ -366,11 +414,18 @@ def test_get_vision_image_supports_configurable_analysis_resolutions(box):
     manager.api.download_bytes = _make_jpeg_bytes(size=(2592, 1944))
     _async_register_services(hass)
 
-    result = _run(_call(
-        hass, SERVICE_GET_VISION_IMAGE,
-        {"config_entry_id": "entry-1", "image_id": 5,
-         "max_width": box[0], "max_height": box[1]},
-    ))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_GET_VISION_IMAGE,
+            {
+                "config_entry_id": "entry-1",
+                "image_id": 5,
+                "max_width": box[0],
+                "max_height": box[1],
+            },
+        )
+    )
     assert (result["width"], result["height"]) == box
 
 
@@ -385,6 +440,7 @@ def test_get_vision_image_rejects_decode_failure():
 
 
 # --------------- inventory <-> image ownership agreement (regression) ---------------
+
 
 def test_inventory_and_image_agree_on_ownership_round_trip():
     """Every image get_vision_inventory lists MUST pass get_vision_image's
@@ -403,8 +459,11 @@ def test_inventory_and_image_agree_on_ownership_round_trip():
     manager.api = FakeVisionApi(
         images=[
             {
-                "id": image_id, "device_id": 42, "created_at": recent,
-                "attachment_processed_at": recent, "meta": {"x": 1, "y": 2, "z": 3},
+                "id": image_id,
+                "device_id": 42,
+                "created_at": recent,
+                "attachment_processed_at": recent,
+                "meta": {"x": 1, "y": 2, "z": 3},
                 "attachment_url": "https://x/img.jpg",
             }
             for image_id in (3043473, 3043472, 3043471, 3043164)
@@ -418,10 +477,13 @@ def test_inventory_and_image_agree_on_ownership_round_trip():
     assert listed_ids == [3043473, 3043472, 3043471, 3043164]
 
     for image_id in listed_ids:
-        result = _run(_call(
-            hass, SERVICE_GET_VISION_IMAGE,
-            {"config_entry_id": "entry-1", "image_id": image_id},
-        ))
+        result = _run(
+            _call(
+                hass,
+                SERVICE_GET_VISION_IMAGE,
+                {"config_entry_id": "entry-1", "image_id": image_id},
+            )
+        )
         assert result["image_id"] == image_id
         assert result["content_type"] == "image/jpeg"
 
@@ -462,6 +524,7 @@ def test_vision_response_service_passes_validation_error_through():
     """The response-service guard must not swallow or reclassify a
     ServiceValidationError -- it stays a 400 with its translated message.
     """
+
     async def handler(call):
         raise ServiceValidationError(
             translation_domain=DOMAIN, translation_key="vision_image_wrong_device"
@@ -478,6 +541,7 @@ def test_vision_response_service_wraps_unexpected_error_as_structured_500():
     aiohttp's opaque 500 page; it becomes a translated HomeAssistantError so
     the caller sees a structured server error.
     """
+
     async def handler(call):
         raise ValueError("kaboom")
 
@@ -490,6 +554,7 @@ def test_vision_response_service_wraps_unexpected_error_as_structured_500():
 
 
 # --------------------------- soil-height bridge ---------------------------
+
 
 def _soil_point(point_id=70, **changes):
     point = {
@@ -526,9 +591,7 @@ def test_get_vision_soil_points_filters_by_metadata_not_name():
     }
     _async_register_services(hass)
 
-    result = _run(
-        _call(hass, SERVICE_GET_VISION_SOIL_POINTS, {"config_entry_id": "entry-1"})
-    )
+    result = _run(_call(hass, SERVICE_GET_VISION_SOIL_POINTS, {"config_entry_id": "entry-1"}))
     assert [point["id"] for point in result["points"]] == [70, 71]
     assert result["motion"]["axis_bounds"]["x"] == [0.0, 6000.0]
     assert result["motion"]["axis_bounds"]["z"] == [-1200.0, 0.0]
@@ -668,10 +731,11 @@ def test_list_bots_advertises_grid_repair_capability():
     _make_bot(hass)
     _async_register_services(hass)
     result = _run(_call(hass, SERVICE_LIST_VISION_BOTS, {}))
-    assert result["bots"][0]["integration_version"] == "2.1.0"
+    assert result["bots"][0]["integration_version"] == "2.2.0"
     assert "photo_grid_repair" in result["bots"][0]["capabilities"]
     assert "verified_photo_grid_repair" in result["bots"][0]["capabilities"]
     assert "position_verified_photo_grid_repair" in result["bots"][0]["capabilities"]
+    assert "illuminated_photo_grid_capture" in result["bots"][0]["capabilities"]
     assert "vision_image_deletion" in result["bots"][0]["capabilities"]
 
 
@@ -790,10 +854,14 @@ def test_apply_soil_relocation_rechecks_age_and_update_timestamp():
 
 # --------------------------- apply_vision_radius ---------------------------
 
+
 def _plant_record(plant_id, **overrides):
     base = {
-        "id": plant_id, "device_id": "42", "pointer_type": "Plant",
-        "discarded_at": None, "radius": 120.0,
+        "id": plant_id,
+        "device_id": "42",
+        "pointer_type": "Plant",
+        "discarded_at": None,
+        "radius": 120.0,
     }
     base.update(overrides)
     return base
@@ -805,11 +873,21 @@ def test_apply_vision_radius_dry_run_validated():
     manager.api.points[7] = _plant_record(7)
     _async_register_services(hass)
 
-    result = _run(_call(hass, SERVICE_APPLY_VISION_RADIUS, {
-        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
-        "expected_current_radius_mm": 120.0, "recommended_radius_mm": 150.0, "confidence": 0.9,
-        "apply": False,
-    }))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_APPLY_VISION_RADIUS,
+            {
+                "config_entry_id": "entry-1",
+                "plant_id": 7,
+                "measurement_id": str(uuid.uuid4()),
+                "expected_current_radius_mm": 120.0,
+                "recommended_radius_mm": 150.0,
+                "confidence": 0.9,
+                "apply": False,
+            },
+        )
+    )
     assert result["status"] == "validated"
     assert "async_patch_plant_radius" not in manager.api.calls
 
@@ -820,11 +898,21 @@ def test_apply_vision_radius_applies_when_requested():
     manager.api.points[7] = _plant_record(7)
     _async_register_services(hass)
 
-    result = _run(_call(hass, SERVICE_APPLY_VISION_RADIUS, {
-        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
-        "expected_current_radius_mm": 120.0, "recommended_radius_mm": 150.0, "confidence": 0.9,
-        "apply": True,
-    }))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_APPLY_VISION_RADIUS,
+            {
+                "config_entry_id": "entry-1",
+                "plant_id": 7,
+                "measurement_id": str(uuid.uuid4()),
+                "expected_current_radius_mm": 120.0,
+                "recommended_radius_mm": 150.0,
+                "confidence": 0.9,
+                "apply": True,
+            },
+        )
+    )
     assert result["status"] == "applied"
     assert result["old_radius_mm"] == 120.0
     assert result["new_radius_mm"] == 150.0
@@ -840,11 +928,21 @@ def test_apply_vision_radius_applies_regardless_of_confidence():
     manager.api.points[7] = _plant_record(7)
     _async_register_services(hass)
 
-    result = _run(_call(hass, SERVICE_APPLY_VISION_RADIUS, {
-        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
-        "expected_current_radius_mm": 120.0, "recommended_radius_mm": 150.0, "confidence": 0.1,
-        "apply": True,
-    }))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_APPLY_VISION_RADIUS,
+            {
+                "config_entry_id": "entry-1",
+                "plant_id": 7,
+                "measurement_id": str(uuid.uuid4()),
+                "expected_current_radius_mm": 120.0,
+                "recommended_radius_mm": 150.0,
+                "confidence": 0.1,
+                "apply": True,
+            },
+        )
+    )
     assert result["status"] == "applied"
     assert manager.api.points[7]["radius"] == 150.0
 
@@ -855,11 +953,21 @@ def test_apply_vision_radius_stale_radius_is_conflict():
     manager.api.points[7] = _plant_record(7, radius=200.0)
     _async_register_services(hass)
 
-    result = _run(_call(hass, SERVICE_APPLY_VISION_RADIUS, {
-        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
-        "expected_current_radius_mm": 120.0, "recommended_radius_mm": 150.0, "confidence": 0.9,
-        "apply": True,
-    }))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_APPLY_VISION_RADIUS,
+            {
+                "config_entry_id": "entry-1",
+                "plant_id": 7,
+                "measurement_id": str(uuid.uuid4()),
+                "expected_current_radius_mm": 120.0,
+                "recommended_radius_mm": 150.0,
+                "confidence": 0.9,
+                "apply": True,
+            },
+        )
+    )
     assert result["status"] == "conflict"
 
 
@@ -871,11 +979,21 @@ def test_apply_vision_radius_allows_shrink_of_any_size():
     manager.api.points[7] = _plant_record(7)
     _async_register_services(hass)
 
-    result = _run(_call(hass, SERVICE_APPLY_VISION_RADIUS, {
-        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
-        "expected_current_radius_mm": 120.0, "recommended_radius_mm": 90.0, "confidence": 0.9,
-        "apply": True,
-    }))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_APPLY_VISION_RADIUS,
+            {
+                "config_entry_id": "entry-1",
+                "plant_id": 7,
+                "measurement_id": str(uuid.uuid4()),
+                "expected_current_radius_mm": 120.0,
+                "recommended_radius_mm": 90.0,
+                "confidence": 0.9,
+                "apply": True,
+            },
+        )
+    )
     assert result["status"] == "applied"
     assert manager.api.points[7]["radius"] == 90.0
 
@@ -913,23 +1031,35 @@ def test_apply_vision_radius_does_not_claim_success_when_patch_is_not_persisted(
 
 # --------------------------- apply_vision_removal ---------------------------
 
+
 def test_apply_vision_removal_dry_run_and_human_approval():
     hass = FakeHass()
     manager, _ = _make_bot(hass)
     manager.api.points[7] = _plant_record(7, plant_stage="planted")
     _async_register_services(hass)
     payload = {
-        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
-        "expected_current_radius_mm": 120.0, "confidence": 0.1,
+        "config_entry_id": "entry-1",
+        "plant_id": 7,
+        "measurement_id": str(uuid.uuid4()),
+        "expected_current_radius_mm": 120.0,
+        "confidence": 0.1,
     }
 
     dry_run = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, payload))
     assert dry_run["status"] == "validated"
     assert "async_archive_plant" not in manager.api.calls
 
-    result = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, {
-        **payload, "apply": True, "human_approved": True,
-    }))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_APPLY_VISION_REMOVAL,
+            {
+                **payload,
+                "apply": True,
+                "human_approved": True,
+            },
+        )
+    )
     assert result["status"] == "applied"
     assert manager.api.points[7]["plant_stage"] == "removed"
 
@@ -940,8 +1070,12 @@ def test_apply_vision_removal_stale_radius_is_conflict():
     manager.api.points[7] = _plant_record(7, plant_stage="planted", radius=200.0)
     _async_register_services(hass)
     payload = {
-        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
-        "expected_current_radius_mm": 120.0, "confidence": 0.9, "apply": True,
+        "config_entry_id": "entry-1",
+        "plant_id": 7,
+        "measurement_id": str(uuid.uuid4()),
+        "expected_current_radius_mm": 120.0,
+        "confidence": 0.9,
+        "apply": True,
     }
     conflict = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, payload))
     assert conflict["status"] == "conflict"
@@ -954,10 +1088,20 @@ def test_apply_vision_removal_applies_when_requested():
     manager.api.points[7] = _plant_record(7, plant_stage="planted")
     _async_register_services(hass)
 
-    result = _run(_call(hass, SERVICE_APPLY_VISION_REMOVAL, {
-        "config_entry_id": "entry-1", "plant_id": 7, "measurement_id": str(uuid.uuid4()),
-        "expected_current_radius_mm": 120.0, "confidence": 0.9, "apply": True,
-    }))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_APPLY_VISION_REMOVAL,
+            {
+                "config_entry_id": "entry-1",
+                "plant_id": 7,
+                "measurement_id": str(uuid.uuid4()),
+                "expected_current_radius_mm": 120.0,
+                "confidence": 0.9,
+                "apply": True,
+            },
+        )
+    )
     assert result["status"] == "applied"
 
 
@@ -1064,15 +1208,25 @@ def test_known_weed_radius_only_increases_and_disappeared_weed_can_be_removed():
 
 # --------------------------- upsert_vision_spread_curve ---------------------------
 
+
 def test_upsert_curve_dry_run_validated():
     hass = FakeHass()
     _make_bot(hass)
     _async_register_services(hass)
 
-    result = _run(_call(hass, SERVICE_UPSERT_VISION_SPREAD_CURVE, {
-        "config_entry_id": "entry-1", "crop_slug": "tomato",
-        "name": "[FarmBot Vision] Tomato", "data": {"0": 10, "20": 40}, "apply": False,
-    }))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_UPSERT_VISION_SPREAD_CURVE,
+            {
+                "config_entry_id": "entry-1",
+                "crop_slug": "tomato",
+                "name": "[FarmBot Vision] Tomato",
+                "data": {"0": 10, "20": 40},
+                "apply": False,
+            },
+        )
+    )
     assert result["status"] == "validated"
 
 
@@ -1081,10 +1235,19 @@ def test_upsert_curve_rejects_monotonic_violation():
     _make_bot(hass)
     _async_register_services(hass)
     with pytest.raises(ServiceValidationError):
-        _run(_call(hass, SERVICE_UPSERT_VISION_SPREAD_CURVE, {
-            "config_entry_id": "entry-1", "crop_slug": "tomato",
-            "name": "[FarmBot Vision] Tomato", "data": {"0": 40, "20": 10}, "apply": False,
-        }))
+        _run(
+            _call(
+                hass,
+                SERVICE_UPSERT_VISION_SPREAD_CURVE,
+                {
+                    "config_entry_id": "entry-1",
+                    "crop_slug": "tomato",
+                    "name": "[FarmBot Vision] Tomato",
+                    "data": {"0": 40, "20": 10},
+                    "apply": False,
+                },
+            )
+        )
 
 
 def test_upsert_curve_rejects_modifying_user_created_curve():
@@ -1093,10 +1256,20 @@ def test_upsert_curve_rejects_modifying_user_created_curve():
     manager.api.curves[5] = {"id": 5, "name": "My Tomatoes", "type": "spread", "data": {"0": 10}}
     _async_register_services(hass)
     with pytest.raises(ServiceValidationError):
-        _run(_call(hass, SERVICE_UPSERT_VISION_SPREAD_CURVE, {
-            "config_entry_id": "entry-1", "crop_slug": "tomato", "curve_id": 5,
-            "name": "[FarmBot Vision] Tomato", "data": {"0": 10, "20": 40}, "apply": True,
-        }))
+        _run(
+            _call(
+                hass,
+                SERVICE_UPSERT_VISION_SPREAD_CURVE,
+                {
+                    "config_entry_id": "entry-1",
+                    "crop_slug": "tomato",
+                    "curve_id": 5,
+                    "name": "[FarmBot Vision] Tomato",
+                    "data": {"0": 10, "20": 40},
+                    "apply": True,
+                },
+            )
+        )
 
 
 def test_upsert_curve_rejects_assignment_to_wrong_bot_plant():
@@ -1105,11 +1278,20 @@ def test_upsert_curve_rejects_assignment_to_wrong_bot_plant():
     manager.api.points[9] = _plant_record(9, device_id="99")
     _async_register_services(hass)
     with pytest.raises(ServiceValidationError):
-        _run(_call(hass, SERVICE_UPSERT_VISION_SPREAD_CURVE, {
-            "config_entry_id": "entry-1", "crop_slug": "tomato",
-            "name": "[FarmBot Vision] Tomato", "data": {"0": 10, "20": 40},
-            "assign_to_plant_ids": [9], "apply": False,
-        }))
+        _run(
+            _call(
+                hass,
+                SERVICE_UPSERT_VISION_SPREAD_CURVE,
+                {
+                    "config_entry_id": "entry-1",
+                    "crop_slug": "tomato",
+                    "name": "[FarmBot Vision] Tomato",
+                    "data": {"0": 10, "20": 40},
+                    "assign_to_plant_ids": [9],
+                    "apply": False,
+                },
+            )
+        )
 
 
 def test_upsert_curve_creates_and_assigns_when_valid():
@@ -1118,11 +1300,20 @@ def test_upsert_curve_creates_and_assigns_when_valid():
     manager.api.points[9] = _plant_record(9, spread_curve_id=None)
     _async_register_services(hass)
 
-    result = _run(_call(hass, SERVICE_UPSERT_VISION_SPREAD_CURVE, {
-        "config_entry_id": "entry-1", "crop_slug": "tomato",
-        "name": "[FarmBot Vision] Tomato", "data": {"0": 10, "20": 40},
-        "assign_to_plant_ids": [9], "apply": True,
-    }))
+    result = _run(
+        _call(
+            hass,
+            SERVICE_UPSERT_VISION_SPREAD_CURVE,
+            {
+                "config_entry_id": "entry-1",
+                "crop_slug": "tomato",
+                "name": "[FarmBot Vision] Tomato",
+                "data": {"0": 10, "20": 40},
+                "assign_to_plant_ids": [9],
+                "apply": True,
+            },
+        )
+    )
     assert result["status"] == "applied"
     assert result["assignments"] == [{"plant_id": 9, "status": "assigned"}]
     assert manager.api.points[9]["spread_curve_id"] == result["curve_id"]
@@ -1137,25 +1328,44 @@ def test_upsert_curve_rolls_back_partial_assignment_failure():
     _async_register_services(hass)
 
     with pytest.raises(Exception):
-        _run(_call(hass, SERVICE_UPSERT_VISION_SPREAD_CURVE, {
-            "config_entry_id": "entry-1", "crop_slug": "tomato",
-            "name": "[FarmBot Vision] Tomato", "data": {"0": 10, "20": 40},
-            "assign_to_plant_ids": [9, 10], "apply": True,
-        }))
+        _run(
+            _call(
+                hass,
+                SERVICE_UPSERT_VISION_SPREAD_CURVE,
+                {
+                    "config_entry_id": "entry-1",
+                    "crop_slug": "tomato",
+                    "name": "[FarmBot Vision] Tomato",
+                    "data": {"0": 10, "20": 40},
+                    "assign_to_plant_ids": [9, 10],
+                    "apply": True,
+                },
+            )
+        )
     assert manager.api.points[9]["spread_curve_id"] == 1
 
 
 # --------------------------- report_vision_status ---------------------------
+
 
 def test_report_vision_status_updates_manager_entities_state():
     hass = FakeHass()
     manager, _ = _make_bot(hass)
     _async_register_services(hass)
 
-    _run(_call(hass, SERVICE_REPORT_VISION_STATUS, {
-        "config_entry_id": "entry-1", "available": True, "status": "running",
-        "job_id": "job-9", "plants_analysed": 3,
-    }))
+    _run(
+        _call(
+            hass,
+            SERVICE_REPORT_VISION_STATUS,
+            {
+                "config_entry_id": "entry-1",
+                "available": True,
+                "status": "running",
+                "job_id": "job-9",
+                "plants_analysed": 3,
+            },
+        )
+    )
 
     assert manager.vision_status == "running"
     assert manager.vision_job_id == "job-9"
@@ -1194,21 +1404,37 @@ def test_report_vision_status_accepts_null_job_id_and_last_completed_at():
     _async_register_services(hass)
 
     # Idle heartbeat: job_id explicitly null, last_completed_at present.
-    _run(_call(hass, SERVICE_REPORT_VISION_STATUS, {
-        "config_entry_id": "entry-1", "available": True, "status": "idle",
-        "job_id": None, "last_completed_at": "2026-07-19T09:00:00+00:00",
-    }))
+    _run(
+        _call(
+            hass,
+            SERVICE_REPORT_VISION_STATUS,
+            {
+                "config_entry_id": "entry-1",
+                "available": True,
+                "status": "idle",
+                "job_id": None,
+                "last_completed_at": "2026-07-19T09:00:00+00:00",
+            },
+        )
+    )
     assert manager.vision_status == "idle"
     assert manager.vision_job_id is None
-    assert manager.vision_last_completed_at == dt_util.parse_datetime(
-        "2026-07-19T09:00:00+00:00"
-    )
+    assert manager.vision_last_completed_at == dt_util.parse_datetime("2026-07-19T09:00:00+00:00")
 
     # Running: job_id present, last_completed_at explicitly null.
-    _run(_call(hass, SERVICE_REPORT_VISION_STATUS, {
-        "config_entry_id": "entry-1", "available": True, "status": "running",
-        "job_id": "job-42", "last_completed_at": None,
-    }))
+    _run(
+        _call(
+            hass,
+            SERVICE_REPORT_VISION_STATUS,
+            {
+                "config_entry_id": "entry-1",
+                "available": True,
+                "status": "running",
+                "job_id": "job-42",
+                "last_completed_at": None,
+            },
+        )
+    )
     assert manager.vision_status == "running"
     assert manager.vision_job_id == "job-42"
 
@@ -1233,24 +1459,46 @@ def test_report_vision_status_updates_entities_on_two_distinct_reports():
 
     snapshots = []
     async_dispatcher_connect(
-        hass, SIGNAL_VISION_STATE,
+        hass,
+        SIGNAL_VISION_STATE,
         lambda: snapshots.append(_read_vision_entity_state(manager)),
     )
 
     # First-ever report: an idle heartbeat with a null job_id.
-    _run(_call(hass, SERVICE_REPORT_VISION_STATUS, {
-        "config_entry_id": "entry-1", "available": True, "status": "idle",
-        "job_id": None, "last_completed_at": "2026-07-19T09:00:00+00:00",
-        "recommendations": 0, "uncertain": 0,
-    }))
+    _run(
+        _call(
+            hass,
+            SERVICE_REPORT_VISION_STATUS,
+            {
+                "config_entry_id": "entry-1",
+                "available": True,
+                "status": "idle",
+                "job_id": None,
+                "last_completed_at": "2026-07-19T09:00:00+00:00",
+                "recommendations": 0,
+                "uncertain": 0,
+            },
+        )
+    )
 
     # Second, materially different report: a completed analysis.
-    _run(_call(hass, SERVICE_REPORT_VISION_STATUS, {
-        "config_entry_id": "entry-1", "available": True, "status": "idle",
-        "job_id": None, "last_completed_at": "2026-07-19T10:30:00+00:00",
-        "plants_analysed": 7, "recommendations": 3, "uncertain": 2,
-        "message": "Analysis complete",
-    }))
+    _run(
+        _call(
+            hass,
+            SERVICE_REPORT_VISION_STATUS,
+            {
+                "config_entry_id": "entry-1",
+                "available": True,
+                "status": "idle",
+                "job_id": None,
+                "last_completed_at": "2026-07-19T10:30:00+00:00",
+                "plants_analysed": 7,
+                "recommendations": 3,
+                "uncertain": 2,
+                "message": "Analysis complete",
+            },
+        )
+    )
 
     # Both reports must have notified the entities (dedup must not swallow the
     # first-ever write, and a genuine change must dispatch again).
@@ -1275,22 +1523,39 @@ def test_report_vision_status_rejects_overlong_message():
     _async_register_services(hass)
 
     with pytest.raises(vol.Invalid):
-        _run(_call(hass, SERVICE_REPORT_VISION_STATUS, {
-            "config_entry_id": "entry-1", "available": True, "status": "idle",
-            "message": "x" * 241,
-        }))
+        _run(
+            _call(
+                hass,
+                SERVICE_REPORT_VISION_STATUS,
+                {
+                    "config_entry_id": "entry-1",
+                    "available": True,
+                    "status": "idle",
+                    "message": "x" * 241,
+                },
+            )
+        )
 
 
 # --------------------------- request_vision_analysis ---------------------------
+
 
 def test_request_vision_analysis_fires_event():
     hass = FakeHass()
     _make_bot(hass)
     _async_register_services(hass)
 
-    _run(_call(hass, SERVICE_REQUEST_VISION_ANALYSIS, {
-        "config_entry_id": "entry-1", "plant_ids": [1, 2], "mode": "recommend",
-    }))
+    _run(
+        _call(
+            hass,
+            SERVICE_REQUEST_VISION_ANALYSIS,
+            {
+                "config_entry_id": "entry-1",
+                "plant_ids": [1, 2],
+                "mode": "recommend",
+            },
+        )
+    )
 
     assert len(hass.bus.fired) == 1
     event_type, event_data = hass.bus.fired[0]
@@ -1301,6 +1566,7 @@ def test_request_vision_analysis_fires_event():
 
 
 # --------------------------- authentication failure handling ---------------------------
+
 
 def test_get_vision_inventory_auth_failure_triggers_single_reauth():
     hass = FakeHass()

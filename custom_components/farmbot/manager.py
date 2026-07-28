@@ -23,6 +23,7 @@ from .const import (
     EVENT_VISION_REQUEST,
     GRID_REPAIR_COORDINATE_TOLERANCE_MM,
     GRID_REPAIR_IMAGE_TIMEOUT_SECONDS,
+    GRID_REPAIR_LIGHTING_PIN,
     GRID_REPAIR_MAX_PHOTO_ATTEMPTS,
     GRID_REPAIR_POSITION_TIMEOUT_SECONDS,
     GRID_REPAIR_POSITION_TOLERANCE_MM,
@@ -952,8 +953,26 @@ class FarmbotManager:
     ) -> None:
         record = self.grid_repairs[repair_id]
         final_status, final_message = "failed", "Photo-grid repair failed"
+        light_state = (self.status or {}).get("pins", {}).get(str(GRID_REPAIR_LIGHTING_PIN), 0)
+        initial_light_value = int(
+            bool(light_state.get("value", 0) if isinstance(light_state, dict) else light_state)
+        )
         async with self._soil_capture_lock:
             try:
+                if not initial_light_value:
+                    await self.async_rpc_request(
+                        [
+                            {
+                                "kind": "write_pin",
+                                "args": {
+                                    "pin_number": GRID_REPAIR_LIGHTING_PIN,
+                                    "pin_value": 1,
+                                    "pin_mode": 0,
+                                },
+                            }
+                        ],
+                        timeout=SOIL_RPC_TIMEOUT_SECONDS,
+                    )
                 for target in targets:
                     before = {
                         int(item["id"])
@@ -1085,6 +1104,27 @@ class FarmbotManager:
                 _LOGGER.warning("Photo-grid repair %s failed: %s", repair_id, err)
                 final_message = str(err)[:240] or final_message
             finally:
+                if not initial_light_value:
+                    try:
+                        await self.async_rpc_request(
+                            [
+                                {
+                                    "kind": "write_pin",
+                                    "args": {
+                                        "pin_number": GRID_REPAIR_LIGHTING_PIN,
+                                        "pin_value": 0,
+                                        "pin_mode": 0,
+                                    },
+                                }
+                            ],
+                            timeout=SOIL_RPC_TIMEOUT_SECONDS,
+                        )
+                    except Exception as err:  # pylint: disable=broad-except
+                        _LOGGER.warning(
+                            "Could not restore lighting after grid repair %s: %s",
+                            repair_id,
+                            err,
+                        )
                 if all(original_position.get(axis) is not None for axis in ("x", "y", "z")):
                     try:
                         await self.async_rpc_request(

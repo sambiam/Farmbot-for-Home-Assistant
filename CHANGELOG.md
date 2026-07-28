@@ -3,6 +3,16 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.2.0 - 2026-07-28
+
+- **Changed:** Position-verified photo-grid capture now preserves the existing
+  lighting state, switches the standard FarmBot lighting peripheral (pin 7) on
+  before movement and capture begins, and restores the previous state during
+  cleanup. A lighting command failure stops the run before any dark grid
+  photos are requested.
+- **Added:** Advertises the `illuminated_photo_grid_capture` capability so the
+  Vision app can require the complete reliable-grid behavior.
+
 ## 2.1.0 - 2026-07-27
 
 - **Added:** `farmbot.delete_vision_image` deletes a single image owned by the

@@ -106,14 +106,18 @@ def test_grid_repair_moves_takes_photos_and_restores_position():
             },
         ]
         assert [[item["kind"] for item in command] for command in calls] == [
+            ["write_pin"],
             ["move"],
             ["wait", "take_photo"],
             ["move"],
             ["wait", "take_photo"],
+            ["write_pin"],
             ["move"],
         ]
-        assert calls[0][0]["args"] == {}
-        assert calls[0][0]["body"][-1] == {"kind": "safe_z", "args": {}}
+        assert calls[0][0]["args"]["pin_value"] == 1
+        assert calls[-2][0]["args"]["pin_value"] == 0
+        assert calls[1][0]["args"] == {}
+        assert calls[1][0]["body"][-1] == {"kind": "safe_z", "args": {}}
         restore_overwrites = {
             item["args"]["axis"]: item["args"]["axis_operand"]["args"]["number"]
             for item in calls[-1][0]["body"]
@@ -188,6 +192,7 @@ def test_grid_repair_retries_photo_until_a_processed_target_image_exists():
         assert repair["status"] == "complete"
         assert repair["photo_attempt"] == 6
         assert [[item["kind"] for item in command] for command in calls] == [
+            ["write_pin"],
             ["move"],
             ["wait", "take_photo"],
             ["wait", "take_photo"],
@@ -195,6 +200,7 @@ def test_grid_repair_retries_photo_until_a_processed_target_image_exists():
             ["wait", "take_photo"],
             ["wait", "take_photo"],
             ["wait", "take_photo"],
+            ["write_pin"],
             ["move"],
         ]
         await manager.async_close()
