@@ -12,6 +12,7 @@ bridge to a separate **FarmBot Vision** companion app.
 - Fetches & lists sequences in a `select` dropdown
 - Secure MQTT connection using your FarmBot credentials
 - `farmbot.execute_sequence` and `farmbot.move_to` services for scripts/automations
+- Records FarmBot panel-button PinBinding triggers for GPIO diagnostics
 - A FarmBot Vision bridge: services, events and entities that let a separate
   computer-vision app read FarmBot plant/image/curve data and propose
   plant-radius or spread-curve changes, without ever receiving your FarmBot
@@ -73,6 +74,41 @@ app) avoids the two config surfaces silently disagreeing with each other.
 Changing these options takes effect immediately on the next service call —
 no reload of the FarmBot integration entry is required, because the option
 values are read fresh from the config entry each time a service runs.
+
+## Panel button / GPIO diagnostics
+
+FarmBot's panel buttons are Raspberry Pi GPIO **Pin Bindings**, separate from
+the Farmduino peripheral pins shown as switches. The integration listens to
+FarmBot OS's MQTT log stream and records each rising edge that the PinBinding
+handler accepts:
+
+- `FarmBot <device id> Last Button Input` is a timestamp sensor. Its attributes
+  contain `gpio`, `button`, `action`, `press_count`, `observed_at`, `source`,
+  and FarmBot OS's raw `message`.
+- A `farmbot_button_input` event is fired for every accepted press with the
+  same fields. In Developer Tools > Events, subscribe to
+  `farmbot_button_input`, then press each physical button.
+- The existing action is not changed or delayed. A button assigned to E-Stop,
+  Take Photo, a sequence, or another PinBinding action continues to perform
+  that action.
+
+The standard panel mappings in current FarmBot OS are Button 1/GPIO 16,
+Button 2/GPIO 22, Button 3/GPIO 26, Button 4/GPIO 5, and Button 5/GPIO 20.
+Other configured Pi GPIO PinBindings are also detected. If FarmBot OS reports
+a missing sequence or unknown binding, the press is retained with
+`action: configuration_error`.
+
+This observes FarmBot OS's debounced **rising-edge trigger**, not the raw
+electrical high/low level or button release. FarmBot OS does not include Pi
+GPIO input levels in its normal MQTT status tree. Consequently:
+
+- an event proves the physical input reached FarmBot OS and points toward the
+  configured action/software path;
+- no event, while the same button/wiring works on another GPIO path, points
+  toward the PinBinding worker, GPIO assignment, or FarmBot OS configuration;
+- it cannot prove that an edge FarmBot OS never detected occurred electrically.
+  A logic analyser or temporary on-device FarmBot OS instrumentation is needed
+  for that final distinction.
 
 ## FarmBot Vision bridge
 

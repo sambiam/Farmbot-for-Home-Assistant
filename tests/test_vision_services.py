@@ -731,7 +731,7 @@ def test_list_bots_advertises_grid_repair_capability():
     _make_bot(hass)
     _async_register_services(hass)
     result = _run(_call(hass, SERVICE_LIST_VISION_BOTS, {}))
-    assert result["bots"][0]["integration_version"] == "2.3.0"
+    assert result["bots"][0]["integration_version"] == "2.4.0"
     assert "photo_grid_repair" in result["bots"][0]["capabilities"]
     assert "verified_photo_grid_repair" in result["bots"][0]["capabilities"]
     assert "position_verified_photo_grid_repair" in result["bots"][0]["capabilities"]

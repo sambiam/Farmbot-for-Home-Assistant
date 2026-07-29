@@ -3,6 +3,19 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.4.0 - 2026-07-29
+
+- **Added:** A `FarmBot Last Button Input` timestamp sensor records every
+  Raspberry Pi GPIO PinBinding trigger reported by FarmBot OS, including the
+  GPIO number, FarmBot button label, configured action, raw message, and a
+  cumulative press count.
+- **Added:** Each detected press fires a `farmbot_button_input` Home Assistant
+  event with the same diagnostic fields, allowing live event inspection and
+  automations without changing the button's configured FarmBot action.
+- **Changed:** FarmBot OS PinBinding configuration errors are also recorded as
+  button inputs, making it possible to distinguish a working GPIO/button from
+  a missing sequence assignment.
+
 ## 2.3.0 - 2026-07-29
 
 - **Fixed:** A photo-grid repair batch no longer aborts entirely the moment

@@ -2,10 +2,11 @@ import asyncio
 import json
 import logging
 import math
+import re
 import ssl
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Tuple
 
 import paho.mqtt.client as mqtt
@@ -20,6 +21,7 @@ from .const import (
     API_BASE_URL,
     DEFAULT_VISION_ENABLED,
     DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+    EVENT_BUTTON_INPUT,
     EVENT_VISION_REQUEST,
     GRID_REPAIR_COORDINATE_TOLERANCE_MM,
     GRID_REPAIR_IMAGE_TIMEOUT_SECONDS,
@@ -31,6 +33,7 @@ from .const import (
     MQTT_PORT,
     OPTION_VISION_ENABLED,
     OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+    SIGNAL_BUTTON_INPUT,
     SIGNAL_SEQUENCE_SELECTED,
     SIGNAL_STATE,
     SIGNAL_VISION_STATE,
@@ -46,6 +49,14 @@ from .const import (
 from .jwt_util import decode_jwt_payload
 
 _LOGGER = logging.getLogger(__name__)
+
+_PIN_BINDING_TRIGGER_RE = re.compile(
+    r"^(?P<label>.+?) triggered, executing (?P<action>.+)$"
+)
+_PIN_BINDING_FAILURE_RE = re.compile(
+    r"^(?:Failed to find associated Sequence for:|Unknown PinBinding:)\s*(?P<label>.+)$"
+)
+_BUTTON_PIN_RE = re.compile(r"\(Pi (?P<pin>\d+)\)|Pi GPIO (?P<gpio>\d+)")
 
 
 def _mask(s: str, keep_start: int = 4, keep_end: int = 4) -> str:
@@ -108,6 +119,8 @@ class FarmbotManager:
         self._auth_failed = False  # Track auth failure to prevent spam
         self._last_bad_auth_log_time = 0  # Rate-limit bad-auth logging
         self.selected_sequence: Optional[dict] = None  # {'id': int, 'name': str} or None
+        self.last_button_input: Optional[dict[str, Any]] = None
+        self.button_input_count = 0
         # Do not connect here; async_setup_entry will await connect_mqtt()
 
         # -------------------- FarmBot Vision bridge runtime state --------------------
@@ -356,8 +369,52 @@ class FarmbotManager:
             )
         elif msg.topic == TOPIC_FROM_DEVICE.format(device_id=self.device_id):
             self.hass.loop.call_soon_threadsafe(self._resolve_rpc_response, payload)
+        elif msg.topic == TOPIC_LOGS.format(device_id=self.device_id):
+            self.hass.loop.call_soon_threadsafe(self._handle_log_message, payload)
         else:
             _LOGGER.debug("Unhandled topic %s", msg.topic)
+
+    def _handle_log_message(self, payload: dict[str, Any]) -> None:
+        """Turn FarmBot OS PinBinding trigger logs into durable HA diagnostics."""
+        message = str(payload.get("message") or "").strip()
+        trigger = _PIN_BINDING_TRIGGER_RE.match(message)
+        failure = _PIN_BINDING_FAILURE_RE.match(message)
+        if trigger is None and failure is None:
+            return
+
+        match = trigger or failure
+        assert match is not None
+        label = match.group("label").strip()
+        pin_match = _BUTTON_PIN_RE.search(label)
+        if pin_match is None:
+            return
+
+        created_at = payload.get("created_at")
+        try:
+            observed_at = datetime.fromtimestamp(float(created_at), tz=timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            observed_at = dt_util.utcnow()
+
+        self.button_input_count += 1
+        event = {
+            "device_id": self.device_id,
+            "gpio": int(pin_match.group("pin") or pin_match.group("gpio")),
+            "button": label,
+            "action": trigger.group("action").strip() if trigger else "configuration_error",
+            "observed_at": observed_at.isoformat(),
+            "press_count": self.button_input_count,
+            "source": "farmbot_os_pin_binding_log",
+            "message": message,
+        }
+        self.last_button_input = {**event, "observed_at_datetime": observed_at}
+        _LOGGER.info(
+            "FarmBot button input: GPIO %s (%s), action=%s",
+            event["gpio"],
+            label,
+            event["action"],
+        )
+        async_dispatcher_send(self.hass, SIGNAL_BUTTON_INPUT)
+        self.hass.bus.async_fire(EVENT_BUTTON_INPUT, event)
 
     # -------------------- Command helpers --------------------
     def _publish_rpc(self, rpc: dict):

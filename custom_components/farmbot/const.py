@@ -12,6 +12,7 @@ TOPIC_LOGS = "bot/{device_id}/logs"
 
 # Dispatcher signals
 SIGNAL_STATE = "farmbot_state_update"
+SIGNAL_BUTTON_INPUT = "farmbot_button_input_update"
 SIGNAL_VISION_STATE = "farmbot_vision_state_update"
 SIGNAL_SEQUENCE_SELECTED = "farmbot_sequence_selected"
 
@@ -29,7 +30,7 @@ VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
-INTEGRATION_VERSION = "2.3.0"
+INTEGRATION_VERSION = "2.4.0"
 VISION_CAPABILITIES = [
     "photo_grid_repair",
     "verified_photo_grid_repair",
@@ -65,6 +66,7 @@ SERVICE_REQUEST_VISION_ANALYSIS = "request_vision_analysis"
 
 # Home Assistant event fired for farmbot.request_vision_analysis
 EVENT_VISION_REQUEST = "farmbot_vision_request"
+EVENT_BUTTON_INPUT = "farmbot_button_input"
 
 # Integration options (OptionsFlow) - keys and defaults
 #

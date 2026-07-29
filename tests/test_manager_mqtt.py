@@ -92,6 +92,54 @@ def test_on_connect_other_failure_does_not_trigger_reauth():
     client.subscribe.assert_not_called()
 
 
+def test_pin_binding_log_records_button_input_and_fires_event():
+    hass, manager = _make_manager()
+    message = MagicMock()
+    message.topic = TOPIC_LOGS.format(device_id=DEVICE_ID)
+    message.payload = (
+        b'{"message":"Button 2: Take Photo (Pi 22) triggered, executing '
+        b'Take Photo","created_at":1785283200}'
+    )
+
+    manager._on_message(None, None, message)
+
+    assert manager.button_input_count == 1
+    assert manager.last_button_input["gpio"] == 22
+    assert manager.last_button_input["button"] == "Button 2: Take Photo (Pi 22)"
+    assert manager.last_button_input["action"] == "Take Photo"
+    assert manager.last_button_input["observed_at"].startswith("2026-")
+    assert hass.bus.fired == [
+        (
+            "farmbot_button_input",
+            {
+                "device_id": DEVICE_ID,
+                "gpio": 22,
+                "button": "Button 2: Take Photo (Pi 22)",
+                "action": "Take Photo",
+                "observed_at": manager.last_button_input["observed_at"],
+                "press_count": 1,
+                "source": "farmbot_os_pin_binding_log",
+                "message": (
+                    "Button 2: Take Photo (Pi 22) triggered, executing Take Photo"
+                ),
+            },
+        )
+    ]
+
+
+def test_pin_binding_configuration_error_and_unrelated_logs():
+    hass, manager = _make_manager()
+    manager._handle_log_message(
+        {"message": "Failed to find associated Sequence for: Button 4: (Pi 5)"}
+    )
+    manager._handle_log_message({"message": "Movement complete"})
+
+    assert manager.button_input_count == 1
+    assert manager.last_button_input["gpio"] == 5
+    assert manager.last_button_input["action"] == "configuration_error"
+    assert len(hass.bus.fired) == 1
+
+
 def test_soil_point_identity_and_edge_triplets():
     _, manager = _make_manager()
     assert manager.is_soil_height_point(
