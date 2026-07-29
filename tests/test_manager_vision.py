@@ -95,14 +95,18 @@ def test_grid_repair_moves_takes_photos_and_restores_position():
                 "x": 100.0,
                 "y": 200.0,
                 "z": 0.0,
+                "index": 0,
                 "distance_from_target_mm": 0,
+                "target_index": 0,
             },
             {
                 "image_id": 2,
                 "x": 300.0,
                 "y": 400.0,
                 "z": 0.0,
+                "index": 1,
                 "distance_from_target_mm": 0,
+                "target_index": 1,
             },
         ]
         assert [[item["kind"] for item in command] for command in calls] == [
@@ -248,6 +252,7 @@ def test_grid_repair_does_not_take_photo_when_live_position_did_not_move():
             "x": 302.1,
             "y": 451.0,
             "z": -1.2,
+            "index": 0,
         }
         assert "last live position was X 274.0, Y 721.0, Z -1.0" in repair["message"]
         assert all(item["kind"] != "take_photo" for command in calls for item in command)
@@ -321,10 +326,11 @@ def test_grid_repair_continues_past_a_failed_target_and_captures_the_rest():
         assert repair["status"] == "failed"
         assert [frame["x"] for frame in repair["frames"]] == [100.0, 500.0]
         assert repair["completed_targets"] == [
-            {"x": 100.0, "y": 200.0, "z": 0.0},
-            {"x": 500.0, "y": 600.0, "z": 0.0},
+            {"x": 100.0, "y": 200.0, "z": 0.0, "index": 0},
+            {"x": 500.0, "y": 600.0, "z": 0.0, "index": 2},
         ]
-        assert repair["failed_targets"] == [{"x": 300.0, "y": 400.0, "z": 0.0}]
+        assert repair["failed_targets"] == [{"x": 300.0, "y": 400.0, "z": 0.0, "index": 1}]
+        assert [item["code"] for item in repair["failures"]] == ["movement"]
         assert "Captured 2 of 3 photo-grid cells" in repair["message"]
         assert "1 failed" in repair["message"]
         await manager.async_close()
@@ -388,7 +394,10 @@ def test_grid_repair_continues_when_a_target_image_never_arrives():
 
         repair = manager.grid_repair(repair_id)
         assert repair["status"] == "failed"
-        assert repair["failed_targets"] == [{"x": 100.0, "y": 200.0, "z": 0.0}]
+        assert repair["failed_targets"] == [{"x": 100.0, "y": 200.0, "z": 0.0, "index": 0}]
+        # An image that never arrives is an unknown completion state, not a
+        # captured cell.
+        assert [item["code"] for item in repair["failures"]] == ["upload_timeout"]
         assert [frame["x"] for frame in repair["frames"]] == [300.0]
         assert "did not produce a processed image" in repair["message"]
         # Both targets were moved to and had photo attempts made; the third

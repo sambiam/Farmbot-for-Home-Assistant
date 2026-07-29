@@ -30,13 +30,22 @@ VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
-INTEGRATION_VERSION = "2.4.0"
+INTEGRATION_VERSION = "2.5.0"
 VISION_CAPABILITIES = [
     "photo_grid_repair",
     "verified_photo_grid_repair",
     "position_verified_photo_grid_repair",
     "illuminated_photo_grid_capture",
     "vision_image_deletion",
+    # A whole bed grid fits in one call, so the run's lighting, its entry to
+    # the grid and its return to the staging position happen exactly once
+    # instead of once per twelve-cell chunk. See
+    # GRID_REPAIR_MAX_TARGETS_PER_CALL.
+    "continuous_photo_grid_capture",
+    # Each target may carry a caller-owned `index`; every frame, completed
+    # target and failed target is echoed back with it, so the caller tracks
+    # cells by stable identity instead of by coordinate proximity.
+    "indexed_photo_grid_targets",
 ]
 
 # Service names (existing)
@@ -141,6 +150,30 @@ GRID_REPAIR_COORDINATE_TOLERANCE_MM = 25.0
 GRID_REPAIR_POSITION_TOLERANCE_MM = 15.0
 GRID_REPAIR_POSITION_TIMEOUT_SECONDS = 60
 GRID_REPAIR_LIGHTING_PIN = 7
+# One `start_vision_grid_repair` call carries a whole bed grid.
+#
+# The previous cap was twelve, which forced the Vision app to slice a 77-cell
+# serpentine route into seven separate calls. Each call is its own run: it
+# switched the lighting on, drove in from wherever the gantry was parked,
+# photographed twelve cells, then switched the lighting off and drove back to
+# the staging position -- six pointless round trips out of the bed, six
+# lighting cycles, and rows cut in half and resumed later. Nothing about the
+# hardware required that; only this schema limit did.
+#
+# 256 covers the largest bed the camera footprint can produce (a 2.6 m x 6 m
+# bed at the tightest sensible overlap is well under 200 cells) while keeping
+# a bound on how much movement a single service call can queue.
+GRID_REPAIR_MAX_TARGETS_PER_CALL = 256
+# What integrations before 2.5.0 accepted. The Vision app falls back to this
+# chunk size when `continuous_photo_grid_capture` is not advertised, so it
+# must not be raised here without also raising it there.
+GRID_REPAIR_LEGACY_MAX_TARGETS_PER_CALL = 12
+# Cell-to-cell travel inside the grid skips FarmBot's `safe_z` retract only
+# when every cell shares one Z *and* that Z is within this margin of the top
+# of the Z axis -- i.e. the gantry is already as retracted as `safe_z` could
+# make it, so the retract/descend cycle adds wear and time without adding
+# clearance. Any lower capture height keeps `safe_z` on every move.
+GRID_REPAIR_FLAT_TRAVEL_TOP_MARGIN_MM = 25.0
 # If this many photo-grid targets fail back-to-back, the bot is likely stuck,
 # disconnected, or the camera is dead; grinding through the rest of a large
 # grid is pointless, so the batch aborts early instead.

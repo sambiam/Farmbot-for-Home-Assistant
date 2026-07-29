@@ -26,6 +26,7 @@ from .const import (
     DEFAULT_IMAGE_MAX_WIDTH,
     DOMAIN,
     EVENT_VISION_REQUEST,
+    GRID_REPAIR_MAX_TARGETS_PER_CALL,
     INTEGRATION_VERSION,
     MAX_IMAGE_DIMENSION,
     MAX_IMAGE_LOOKBACK_HOURS,
@@ -183,21 +184,25 @@ _GRID_REPAIR_TARGET_SCHEMA = vol.Schema(
         vol.Required("x"): vol.Coerce(float),
         vol.Required("y"): vol.Coerce(float),
         vol.Required("z"): vol.Coerce(float),
+        # Caller-owned stable cell identity, echoed back on every frame and on
+        # every completed/failed target. Optional so pre-2.5.0 callers keep
+        # working unchanged.
+        vol.Optional("index"): vol.All(vol.Coerce(int), vol.Range(min=0)),
     }
 )
 
 SERVICE_START_VISION_GRID_REPAIR_SCHEMA = vol.Schema(
     {
         vol.Required("config_entry_id"): cv.string,
-        # The twelve-target cap is part of the published contract: the Vision
-        # add-on mirrors it as PHOTO_GRID_MAX_TARGETS_PER_CALL when chunking a
-        # whole-bed grid. Home Assistant enforces this during schema
-        # validation, so an oversized batch is refused with a bare HTTP 400
-        # before the handler runs -- no status record, no partial capture, and
-        # no per-target detail to diagnose it from. Raising it here without a
-        # matching add-on release is safe; lowering it, or raising it in the
-        # add-on first, silently strands every coordinate in each batch.
-        vol.Required("targets"): vol.All([_GRID_REPAIR_TARGET_SCHEMA], vol.Length(min=1, max=12)),
+        # Home Assistant enforces this during schema validation, so an
+        # oversized batch is refused with a bare HTTP 400 before the handler
+        # runs -- no status record, no partial capture, and no per-target
+        # detail to diagnose it from. Raising it here without a matching
+        # add-on release is safe; lowering it is not.
+        vol.Required("targets"): vol.All(
+            [_GRID_REPAIR_TARGET_SCHEMA],
+            vol.Length(min=1, max=GRID_REPAIR_MAX_TARGETS_PER_CALL),
+        ),
     }
 )
 

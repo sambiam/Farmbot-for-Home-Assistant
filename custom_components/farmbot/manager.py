@@ -24,6 +24,7 @@ from .const import (
     EVENT_BUTTON_INPUT,
     EVENT_VISION_REQUEST,
     GRID_REPAIR_COORDINATE_TOLERANCE_MM,
+    GRID_REPAIR_FLAT_TRAVEL_TOP_MARGIN_MM,
     GRID_REPAIR_IMAGE_TIMEOUT_SECONDS,
     GRID_REPAIR_LIGHTING_PIN,
     GRID_REPAIR_MAX_CONSECUTIVE_FAILURES,
@@ -990,7 +991,7 @@ class FarmbotManager:
         if any(bounds[axis] is None for axis in ("x", "y", "z")):
             raise ValueError("FarmBot axis bounds are unavailable")
         normalized = []
-        for target in targets:
+        for position, target in enumerate(targets):
             try:
                 item = {axis: float(target[axis]) for axis in ("x", "y", "z")}
             except (KeyError, TypeError, ValueError) as err:
@@ -1001,7 +1002,14 @@ class FarmbotManager:
                 not bounds[axis][0] <= item[axis] <= bounds[axis][1] for axis in ("x", "y", "z")
             ):
                 raise ValueError("Repair target is outside FarmBot bounds")
+            # A caller that tracks cells by identity supplies its own index;
+            # everyone else gets this call's position, which is still stable
+            # for the lifetime of the run.
+            raw_index = target.get("index") if isinstance(target, dict) else None
+            item["index"] = position if raw_index is None else int(raw_index)
             normalized.append(item)
+        if len({item["index"] for item in normalized}) != len(normalized):
+            raise ValueError("Repair target indexes must be unique")
         repair_id = str(uuid.uuid4())
         self.grid_repairs[repair_id] = {
             "repair_id": repair_id,
@@ -1018,12 +1026,37 @@ class FarmbotManager:
                 repair_id=repair_id,
                 targets=normalized,
                 original_position=state["position"],
+                flat_travel=self._grid_flat_travel(normalized, bounds["z"]),
             ),
             name=f"farmbot-grid-repair-{repair_id}",
         )
         self._grid_repair_tasks.add(task)
         task.add_done_callback(self._grid_repair_tasks.discard)
         return repair_id
+
+    @staticmethod
+    def _grid_flat_travel(
+        targets: list[dict[str, float]],
+        z_bounds: list[float] | None,
+    ) -> bool:
+        """May cell-to-cell travel skip FarmBot's ``safe_z`` retract?
+
+        Only when every cell is photographed at the same Z *and* that Z is
+        already within GRID_REPAIR_FLAT_TRAVEL_TOP_MARGIN_MM of the top of the
+        Z axis. Under those two conditions ``safe_z`` cannot lift the gantry
+        anywhere it isn't already, so retracting and descending once per cell
+        buys no clearance -- it just adds two Z moves and their settle time to
+        all 77 cells. Any lower capture height, or a grid whose cells differ
+        in Z, keeps ``safe_z`` on every move.
+        """
+        if not targets or z_bounds is None:
+            return False
+        heights = {round(float(target["z"]), 3) for target in targets}
+        if len(heights) != 1:
+            return False
+        z = next(iter(heights))
+        top = float(z_bounds[1])
+        return math.isfinite(top) and abs(top - z) <= GRID_REPAIR_FLAT_TRAVEL_TOP_MARGIN_MM
 
     async def _capture_grid_target(
         self,
@@ -1033,6 +1066,7 @@ class FarmbotManager:
         target: dict[str, float],
         target_number: int,
         total: int,
+        safe_z: bool = True,
     ) -> dict[str, Any] | None:
         """Move to and photograph a single photo-grid cell.
 
@@ -1046,9 +1080,12 @@ class FarmbotManager:
         the caller can record and continue the same way.
         """
 
-        def _record_failure(reason: str) -> None:
+        def _record_failure(reason: str, code: str) -> None:
             record["failed_targets"].append(target)
             record.setdefault("failure_reasons", []).append(reason)
+            record.setdefault("failures", []).append(
+                {"index": target.get("index"), "reason": reason, "code": code}
+            )
             _LOGGER.warning(
                 "Photo-grid repair %s target %d/%d at X %.1f Y %.1f Z %.1f failed: %s",
                 repair_id,
@@ -1079,12 +1116,13 @@ class FarmbotManager:
         # same multi-command request prevents a camera failure from allowing
         # later targets to run at a stale position, which previously
         # produced repeated images.
+        coordinates = {axis: float(target[axis]) for axis in ("x", "y", "z")}
         await self.async_rpc_request(
             [
                 self._move_command(
-                    **target,
+                    **coordinates,
                     speed=100,
-                    safe_z=True,
+                    safe_z=safe_z,
                 )
             ],
             timeout=SOIL_RPC_TIMEOUT_SECONDS,
@@ -1108,7 +1146,8 @@ class FarmbotManager:
             _record_failure(
                 "FarmBot did not reach the requested photo-grid cell "
                 f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f}; "
-                f"last live position was {observed_text}. No photo was requested."
+                f"last live position was {observed_text}. No photo was requested.",
+                "movement",
             )
             return None
         record.update(
@@ -1120,6 +1159,11 @@ class FarmbotManager:
             )
         )
         frame = None
+        # "camera" means take_photo itself was never accepted; "upload_timeout"
+        # means it was accepted but no matching processed image appeared within
+        # GRID_REPAIR_IMAGE_TIMEOUT_SECONDS -- an unknown completion state that
+        # must never be reported as a captured cell.
+        failure_code = "camera"
         for attempt in range(1, GRID_REPAIR_MAX_PHOTO_ATTEMPTS + 1):
             record.update(
                 status="waiting_images",
@@ -1143,6 +1187,7 @@ class FarmbotManager:
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # pylint: disable=broad-except
+                failure_code = "camera"
                 _LOGGER.warning(
                     "Photo-grid repair %s photo RPC attempt %d/%d failed: %s",
                     repair_id,
@@ -1151,6 +1196,7 @@ class FarmbotManager:
                     err,
                 )
                 continue
+            failure_code = "upload_timeout"
             frame = await self._wait_for_grid_image(
                 before=before,
                 target=target,
@@ -1173,10 +1219,11 @@ class FarmbotManager:
             _record_failure(
                 "FarmBot did not produce a processed image at "
                 f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f} "
-                f"after {GRID_REPAIR_MAX_PHOTO_ATTEMPTS} attempts"
+                f"after {GRID_REPAIR_MAX_PHOTO_ATTEMPTS} attempts",
+                failure_code,
             )
             return None
-        return frame
+        return {**frame, "target_index": target.get("index")}
 
     async def _run_grid_repair(
         self,
@@ -1184,7 +1231,14 @@ class FarmbotManager:
         repair_id: str,
         targets: list[dict[str, float]],
         original_position: dict[str, Any],
+        flat_travel: bool = False,
     ) -> None:
+        """Photograph every requested cell as one continuous run.
+
+        Lighting, the drive in from wherever the gantry was parked and the
+        drive back to it are run-level: they happen once around the whole
+        route, never per cell and never per caller-side batch.
+        """
         record = self.grid_repairs[repair_id]
         final_status, final_message = "failed", "Photo-grid repair failed"
         light_state = (self.status or {}).get("pins", {}).get(str(GRID_REPAIR_LIGHTING_PIN), 0)
@@ -1234,6 +1288,12 @@ class FarmbotManager:
                             target=target,
                             target_number=index,
                             total=total,
+                            # The move into the grid starts from wherever the
+                            # gantry was parked and must clear whatever is
+                            # between there and the first cell. Once inside,
+                            # flat travel (when allowed) keeps the camera at
+                            # its capture height for the whole route.
+                            safe_z=not flat_travel or index == 1,
                         )
                     except asyncio.CancelledError:
                         raise
@@ -1242,6 +1302,9 @@ class FarmbotManager:
                         reason = str(err)[:240] or "Unexpected error during photo-grid capture"
                         record["failed_targets"].append(target)
                         record.setdefault("failure_reasons", []).append(reason)
+                        record.setdefault("failures", []).append(
+                            {"index": target.get("index"), "reason": reason, "code": "error"}
+                        )
                         _LOGGER.warning(
                             "Photo-grid repair %s target %d/%d at X %.1f Y %.1f Z %.1f "
                             "failed: %s",
@@ -1271,6 +1334,17 @@ class FarmbotManager:
                         )
                         break
 
+                # An abort leaves the tail of the route untouched. Naming those
+                # cells lets the caller resume them without re-photographing
+                # anything this run already captured.
+                attempted = {
+                    item.get("index")
+                    for group in ("completed_targets", "failed_targets")
+                    for item in record[group]
+                }
+                record["unattempted_targets"] = [
+                    item for item in targets if item.get("index") not in attempted
+                ]
                 succeeded = len(record["frames"])
                 failed_targets = record["failed_targets"]
                 failure_reasons = record.get("failure_reasons") or []

@@ -3,6 +3,32 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.5.0 - 2026-07-29
+
+- **Changed:** `farmbot.start_vision_grid_repair` now accepts up to 256 targets
+  in one call instead of twelve, advertised as the
+  `continuous_photo_grid_capture` capability. A whole bed grid is therefore one
+  run: the lighting is switched on once before the first cell and restored once
+  after the last, and the bot drives in from its parked position and back to it
+  exactly once. Previously a 77-cell grid arrived as seven separate runs, each
+  with its own lighting cycle and its own round trip out to the staging
+  position, which cut rows in half and added six long diagonal journeys.
+- **Added:** Targets may carry a caller-owned `index`, echoed back on every
+  frame (`target_index`), completed target and failed target, advertised as the
+  `indexed_photo_grid_targets` capability. Callers can track cells by stable
+  identity instead of by coordinate proximity, so a verified cell is never
+  re-photographed because its uploaded coordinates drifted a few millimetres.
+- **Added:** `failures` reports `{index, reason, code}` per failed cell, with
+  `code` distinguishing `movement`, `camera`, `upload_timeout` and `error`; an
+  aborted run reports the cells it never reached as `unattempted_targets`. An
+  image that never finishes uploading is an unknown completion state and is
+  never counted as a captured cell.
+- **Changed:** Cell-to-cell moves inside a grid skip FarmBot's `safe_z` retract
+  only when every cell shares one Z that is already within 25 mm of the top of
+  the Z axis, where the retract cannot add clearance. The move into the grid and
+  the move back out always retract, and any lower or mixed capture height keeps
+  the retract on every move.
+
 ## 2.4.0 - 2026-07-29
 
 - **Added:** A `FarmBot Last Button Input` timestamp sensor records every
