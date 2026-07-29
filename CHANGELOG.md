@@ -3,6 +3,40 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.3.0 - 2026-07-29
+
+- **Fixed:** A photo-grid repair batch no longer aborts entirely the moment
+  one target cell fails (a missed move confirmation or a camera that never
+  produced an image). Each target is now isolated: a failure is recorded and
+  the run continues to the next cell, so a bad cell partway through a batch
+  no longer silently skips every remaining target. Frames captured before a
+  failure are preserved in the result.
+- **Added:** `GRID_REPAIR_MAX_CONSECUTIVE_FAILURES` (5) bounds a run of
+  back-to-back per-target failures — if the bot is stuck, disconnected, or
+  the camera is dead, the batch stops early instead of grinding through the
+  rest of the grid.
+- **Added:** A photo-grid repair now aborts immediately, with a clear
+  message, if the bot becomes emergency-stopped or loses its MQTT connection
+  mid-batch, rather than continuing to attempt moves.
+- **Changed:** A photo-grid repair batch that captures some but not all
+  targets now reports terminal status `failed` with a message stating how
+  many of how many cells succeeded and the first failure reason (e.g.
+  `"Captured 9 of 12 photo-grid cells; 3 failed (first: ...)"`), while still
+  returning every successfully captured frame.
+- **Changed:** `GRID_REPAIR_POSITION_TOLERANCE_MM` relaxed from 5 mm to
+  15 mm — 5 mm was tighter than FarmBot's real steady-state positioning
+  accuracy and was causing spurious "did not reach the cell" failures. 15 mm
+  stays comfortably below the 25 mm `GRID_REPAIR_COORDINATE_TOLERANCE_MM`
+  used to validate the resulting image.
+- **Changed:** `GRID_REPAIR_POSITION_TIMEOUT_SECONDS` increased from 30 to 60
+  seconds, and `GRID_REPAIR_MAX_PHOTO_ATTEMPTS` reduced from 6 to 3 — since a
+  failed cell no longer aborts the batch, attempts per cell are bounded more
+  tightly so a run of bad cells can't stall the whole grid.
+- **Fixed:** `start_vision_grid_repair` and `start_vision_soil_capture` now
+  prune completed tasks before checking whether FarmBot is busy, reducing
+  spurious `"FarmBot is busy"` rejections when the Vision app immediately
+  queues the next batch after one finishes.
+
 ## 2.2.0 - 2026-07-28
 
 - **Changed:** Position-verified photo-grid capture now preserves the existing

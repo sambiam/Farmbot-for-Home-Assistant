@@ -29,7 +29,7 @@ VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
-INTEGRATION_VERSION = "2.2.0"
+INTEGRATION_VERSION = "2.3.0"
 VISION_CAPABILITIES = [
     "photo_grid_repair",
     "verified_photo_grid_repair",
@@ -125,11 +125,24 @@ SOIL_CAPTURE_SETTLE_MILLISECONDS = 1500
 # FarmBot's take_photo command reports camera failures asynchronously, so an
 # rpc_ok only proves the command was accepted, not that an image was created.
 GRID_REPAIR_IMAGE_TIMEOUT_SECONDS = 60
-GRID_REPAIR_MAX_PHOTO_ATTEMPTS = 6
+# 60 s of image-wait per attempt means a single dead cell could previously
+# burn ~6 minutes at 6 attempts. Failures no longer abort the whole batch
+# (see GRID_REPAIR_MAX_CONSECUTIVE_FAILURES below), so a run of bad cells
+# must stay bounded instead.
+GRID_REPAIR_MAX_PHOTO_ATTEMPTS = 3
 GRID_REPAIR_COORDINATE_TOLERANCE_MM = 25.0
-GRID_REPAIR_POSITION_TOLERANCE_MM = 5.0
-GRID_REPAIR_POSITION_TIMEOUT_SECONDS = 30
+# 5 mm was tighter than FarmBot's real steady-state positioning accuracy and
+# caused spurious "did not reach the cell" aborts. 15 mm is still comfortably
+# below GRID_REPAIR_COORDINATE_TOLERANCE_MM (25 mm) above, which is what
+# actually validates the resulting image, so a photo accepted at 15 mm
+# position error still passes image-coordinate matching.
+GRID_REPAIR_POSITION_TOLERANCE_MM = 15.0
+GRID_REPAIR_POSITION_TIMEOUT_SECONDS = 60
 GRID_REPAIR_LIGHTING_PIN = 7
+# If this many photo-grid targets fail back-to-back, the bot is likely stuck,
+# disconnected, or the camera is dead; grinding through the rest of a large
+# grid is pointless, so the batch aborts early instead.
+GRID_REPAIR_MAX_CONSECUTIVE_FAILURES = 5
 
 # Decompression-bomb guards applied to the *decoded* source image, before any
 # resize. A native FarmBot frame is 2592x1944 (~5 MP); these limits leave

@@ -151,9 +151,6 @@ def test_grid_repair_retries_photo_until_a_processed_target_image_exists():
             [
                 None,
                 None,
-                None,
-                None,
-                None,
                 {
                     "image_id": 22,
                     "x": 100.0,
@@ -190,13 +187,10 @@ def test_grid_repair_retries_photo_until_a_processed_target_image_exists():
 
         repair = manager.grid_repair(repair_id)
         assert repair["status"] == "complete"
-        assert repair["photo_attempt"] == 6
+        assert repair["photo_attempt"] == 3
         assert [[item["kind"] for item in command] for command in calls] == [
             ["write_pin"],
             ["move"],
-            ["wait", "take_photo"],
-            ["wait", "take_photo"],
-            ["wait", "take_photo"],
             ["wait", "take_photo"],
             ["wait", "take_photo"],
             ["wait", "take_photo"],
@@ -257,6 +251,275 @@ def test_grid_repair_does_not_take_photo_when_live_position_did_not_move():
         }
         assert "last live position was X 274.0, Y 721.0, Z -1.0" in repair["message"]
         assert all(item["kind"] != "take_photo" for command in calls for item in command)
+        await manager.async_close()
+
+    _run(scenario())
+
+
+def test_grid_repair_continues_past_a_failed_target_and_captures_the_rest():
+    async def scenario():
+        _, manager, _ = _make_manager()
+        manager._mqtt_connected = True
+        manager._mqtt = object()
+        manager.status = {
+            "location_data": {"position": {"x": 10, "y": 20, "z": 0}},
+            "informational_settings": {"busy": False, "locked": False},
+        }
+        calls = []
+
+        async def fake_rpc(commands, **kwargs):
+            calls.append(commands)
+            return {"kind": "rpc_ok"}
+
+        async def fake_images():
+            return []
+
+        captured = 0
+
+        async def fake_wait_for_grid_image(**kwargs):
+            nonlocal captured
+            captured += 1
+            target = kwargs["target"]
+            return {
+                "image_id": captured,
+                **target,
+                "distance_from_target_mm": 0,
+            }
+
+        async def fake_wait_for_grid_position(**kwargs):
+            target = kwargs["target"]
+            if target["x"] == 300:
+                return None
+            return dict(target)
+
+        manager.async_rpc_request = fake_rpc
+        manager.api.async_get_images = fake_images
+        manager._wait_for_grid_image = fake_wait_for_grid_image
+        manager._wait_for_grid_position = fake_wait_for_grid_position
+        firmware = {
+            "movement_axis_nr_steps_x": 600000,
+            "movement_axis_nr_steps_y": 300000,
+            "movement_axis_nr_steps_z": 100000,
+            "movement_step_per_mm_x": 100,
+            "movement_step_per_mm_y": 100,
+            "movement_step_per_mm_z": 100,
+        }
+        repair_id = manager.start_grid_repair(
+            targets=[
+                {"x": 100, "y": 200, "z": 0},
+                {"x": 300, "y": 400, "z": 0},
+                {"x": 500, "y": 600, "z": 0},
+            ],
+            firmware_config=firmware,
+        )
+        await asyncio.gather(*manager._grid_repair_tasks)
+
+        repair = manager.grid_repair(repair_id)
+        # The middle target failed to confirm its position, but the bot
+        # still moved to and photographed the target after it, and the
+        # earlier target's frame was not lost.
+        assert repair["status"] == "failed"
+        assert [frame["x"] for frame in repair["frames"]] == [100.0, 500.0]
+        assert repair["completed_targets"] == [
+            {"x": 100.0, "y": 200.0, "z": 0.0},
+            {"x": 500.0, "y": 600.0, "z": 0.0},
+        ]
+        assert repair["failed_targets"] == [{"x": 300.0, "y": 400.0, "z": 0.0}]
+        assert "Captured 2 of 3 photo-grid cells" in repair["message"]
+        assert "1 failed" in repair["message"]
+        await manager.async_close()
+
+    _run(scenario())
+
+
+def test_grid_repair_continues_when_a_target_image_never_arrives():
+    async def scenario():
+        _, manager, _ = _make_manager()
+        manager._mqtt_connected = True
+        manager._mqtt = object()
+        manager.status = {
+            "location_data": {"position": {"x": 10, "y": 20, "z": 0}},
+            "informational_settings": {"busy": False, "locked": False},
+        }
+        calls = []
+
+        async def fake_rpc(commands, **kwargs):
+            calls.append(commands)
+            return {"kind": "rpc_ok"}
+
+        async def fake_images():
+            return []
+
+        async def fake_wait_for_grid_image(**kwargs):
+            target = kwargs["target"]
+            if target["x"] == 100:
+                # This cell's image never becomes available, no matter how
+                # many photo attempts are made.
+                return None
+            return {
+                "image_id": 1,
+                **target,
+                "distance_from_target_mm": 0,
+            }
+
+        async def fake_wait_for_grid_position(**kwargs):
+            return dict(kwargs["target"])
+
+        manager.async_rpc_request = fake_rpc
+        manager.api.async_get_images = fake_images
+        manager._wait_for_grid_image = fake_wait_for_grid_image
+        manager._wait_for_grid_position = fake_wait_for_grid_position
+        firmware = {
+            "movement_axis_nr_steps_x": 600000,
+            "movement_axis_nr_steps_y": 300000,
+            "movement_axis_nr_steps_z": 100000,
+            "movement_step_per_mm_x": 100,
+            "movement_step_per_mm_y": 100,
+            "movement_step_per_mm_z": 100,
+        }
+        repair_id = manager.start_grid_repair(
+            targets=[
+                {"x": 100, "y": 200, "z": 0},
+                {"x": 300, "y": 400, "z": 0},
+            ],
+            firmware_config=firmware,
+        )
+        await asyncio.gather(*manager._grid_repair_tasks)
+
+        repair = manager.grid_repair(repair_id)
+        assert repair["status"] == "failed"
+        assert repair["failed_targets"] == [{"x": 100.0, "y": 200.0, "z": 0.0}]
+        assert [frame["x"] for frame in repair["frames"]] == [300.0]
+        assert "did not produce a processed image" in repair["message"]
+        # Both targets were moved to and had photo attempts made; the third
+        # move is the end-of-batch restore back to the original position.
+        move_calls = [c for c in calls if c[0]["kind"] == "move"]
+        assert len(move_calls) == 3
+        await manager.async_close()
+
+    _run(scenario())
+
+
+def test_grid_repair_stops_after_max_consecutive_failures():
+    async def scenario():
+        from custom_components.farmbot.const import GRID_REPAIR_MAX_CONSECUTIVE_FAILURES
+
+        _, manager, _ = _make_manager()
+        manager._mqtt_connected = True
+        manager._mqtt = object()
+        manager.status = {
+            "location_data": {"position": {"x": 10, "y": 20, "z": 0}},
+            "informational_settings": {"busy": False, "locked": False},
+        }
+        calls = []
+
+        async def fake_rpc(commands, **kwargs):
+            calls.append(commands)
+            return {"kind": "rpc_ok"}
+
+        async def fake_images():
+            return []
+
+        async def always_fails_to_move(**_kwargs):
+            return None
+
+        manager.async_rpc_request = fake_rpc
+        manager.api.async_get_images = fake_images
+        manager._wait_for_grid_position = always_fails_to_move
+        firmware = {
+            "movement_axis_nr_steps_x": 600000,
+            "movement_axis_nr_steps_y": 300000,
+            "movement_axis_nr_steps_z": 100000,
+            "movement_step_per_mm_x": 100,
+            "movement_step_per_mm_y": 100,
+            "movement_step_per_mm_z": 100,
+        }
+        # More targets than the consecutive-failure ceiling; the extras
+        # should never be attempted once the batch aborts.
+        targets = [
+            {"x": 100.0 + i, "y": 200.0, "z": 0.0}
+            for i in range(GRID_REPAIR_MAX_CONSECUTIVE_FAILURES + 3)
+        ]
+        repair_id = manager.start_grid_repair(targets=targets, firmware_config=firmware)
+        await asyncio.gather(*manager._grid_repair_tasks)
+
+        repair = manager.grid_repair(repair_id)
+        assert repair["status"] == "failed"
+        assert len(repair["failed_targets"]) == GRID_REPAIR_MAX_CONSECUTIVE_FAILURES
+        assert repair["frames"] == []
+        assert "consecutive failed cells" in repair["message"]
+        # One move attempt per failed cell, plus the end-of-batch restore
+        # back to the original position; targets past the abort point are
+        # never attempted.
+        move_calls = [c for c in calls if c[0]["kind"] == "move"]
+        assert len(move_calls) == GRID_REPAIR_MAX_CONSECUTIVE_FAILURES + 1
+        await manager.async_close()
+
+    _run(scenario())
+
+
+def test_grid_repair_aborts_immediately_when_bot_becomes_emergency_stopped():
+    async def scenario():
+        _, manager, _ = _make_manager()
+        manager._mqtt_connected = True
+        manager._mqtt = object()
+        manager.status = {
+            "location_data": {"position": {"x": 10, "y": 20, "z": 0}},
+            "informational_settings": {"busy": False, "locked": False},
+        }
+        calls = []
+
+        async def fake_rpc(commands, **kwargs):
+            calls.append(commands)
+            return {"kind": "rpc_ok"}
+
+        async def fake_images():
+            return []
+
+        async def fake_wait_for_grid_image(**kwargs):
+            target = kwargs["target"]
+            return {"image_id": 1, **target, "distance_from_target_mm": 0}
+
+        async def fake_wait_for_grid_position(**kwargs):
+            # Simulate the e-stop being hit right after the first target is
+            # confirmed, before the second target's iteration begins.
+            manager.status = {
+                "location_data": {"position": {"x": 10, "y": 20, "z": 0}},
+                "informational_settings": {"busy": False, "locked": True},
+            }
+            return dict(kwargs["target"])
+
+        manager.async_rpc_request = fake_rpc
+        manager.api.async_get_images = fake_images
+        manager._wait_for_grid_image = fake_wait_for_grid_image
+        manager._wait_for_grid_position = fake_wait_for_grid_position
+        firmware = {
+            "movement_axis_nr_steps_x": 600000,
+            "movement_axis_nr_steps_y": 300000,
+            "movement_axis_nr_steps_z": 100000,
+            "movement_step_per_mm_x": 100,
+            "movement_step_per_mm_y": 100,
+            "movement_step_per_mm_z": 100,
+        }
+        repair_id = manager.start_grid_repair(
+            targets=[
+                {"x": 100, "y": 200, "z": 0},
+                {"x": 300, "y": 400, "z": 0},
+                {"x": 500, "y": 600, "z": 0},
+            ],
+            firmware_config=firmware,
+        )
+        await asyncio.gather(*manager._grid_repair_tasks)
+
+        repair = manager.grid_repair(repair_id)
+        assert repair["status"] == "failed"
+        assert [frame["x"] for frame in repair["frames"]] == [100.0]
+        assert repair["failed_targets"] == []
+        assert "emergency-stopped" in repair["message"]
+        # Only the first target was ever moved to; the batch stopped before
+        # attempting the second or third.
+        move_calls = [c for c in calls if c[0]["kind"] == "move"]
+        assert len(move_calls) == 2  # first target's move + the final restore
         await manager.async_close()
 
     _run(scenario())

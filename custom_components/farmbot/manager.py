@@ -24,6 +24,7 @@ from .const import (
     GRID_REPAIR_COORDINATE_TOLERANCE_MM,
     GRID_REPAIR_IMAGE_TIMEOUT_SECONDS,
     GRID_REPAIR_LIGHTING_PIN,
+    GRID_REPAIR_MAX_CONSECUTIVE_FAILURES,
     GRID_REPAIR_MAX_PHOTO_ATTEMPTS,
     GRID_REPAIR_POSITION_TIMEOUT_SECONDS,
     GRID_REPAIR_POSITION_TOLERANCE_MM,
@@ -579,9 +580,23 @@ class FarmbotManager:
         value = steps_f / per_mm_f
         return value if value > 0 else None
 
+    def _live_connection_state(self) -> dict[str, bool]:
+        """Connected/locked flags from live status, independent of firmware config.
+
+        Split out of ``soil_motion_state`` so callers that only need to know
+        whether the bot is currently reachable and not emergency-stopped
+        (e.g. mid-batch abort checks) don't need a firmware config at hand.
+        """
+        info = (self.status or {}).get("informational_settings") or {}
+        return {
+            "connected": self._mqtt is not None and self._mqtt_connected,
+            "locked": bool(info.get("locked", False)),
+        }
+
     def soil_motion_state(self, firmware_config: dict[str, Any]) -> dict[str, Any]:
         info = (self.status or {}).get("informational_settings") or {}
         position = (self.status or {}).get("location_data", {}).get("position") or {}
+        connection = self._live_connection_state()
         home_up = firmware_config.get(
             "movement_home_up_z",
             (self.status or {}).get("mcu_params", {}).get("movement_home_up_z"),
@@ -595,9 +610,9 @@ class FarmbotManager:
         else:
             z_bounds = None
         return {
-            "connected": self._mqtt is not None and self._mqtt_connected,
+            "connected": connection["connected"],
             "busy": bool(info.get("busy", False)) or self._soil_capture_lock.locked(),
-            "locked": bool(info.get("locked", False)),
+            "locked": connection["locked"],
             "position": {axis: position.get(axis) for axis in ("x", "y", "z")},
             "z_direction": z_direction,
             "axis_bounds": {
@@ -677,6 +692,10 @@ class FarmbotManager:
             raise ValueError("FarmBot is not connected")
         if state["locked"]:
             raise ValueError("FarmBot is emergency-stopped")
+        # Prune tasks whose done-callback discard hasn't run yet so a batch
+        # that just finished doesn't cause a spurious "FarmBot is busy".
+        self._soil_capture_tasks = {t for t in self._soil_capture_tasks if not t.done()}
+        self._grid_repair_tasks = {t for t in self._grid_repair_tasks if not t.done()}
         if (
             state["busy"]
             or any(not task.done() for task in self._soil_capture_tasks)
@@ -898,6 +917,11 @@ class FarmbotManager:
             raise ValueError("FarmBot is not connected")
         if state["locked"]:
             raise ValueError("FarmBot is emergency-stopped")
+        # Prune tasks whose done-callback discard hasn't run yet so a batch
+        # that just finished doesn't cause a spurious "FarmBot is busy" when
+        # the Vision app immediately queues the next chunk.
+        self._grid_repair_tasks = {t for t in self._grid_repair_tasks if not t.done()}
+        self._soil_capture_tasks = {t for t in self._soil_capture_tasks if not t.done()}
         if (
             state["busy"]
             or self._soil_capture_lock.locked()
@@ -944,6 +968,159 @@ class FarmbotManager:
         task.add_done_callback(self._grid_repair_tasks.discard)
         return repair_id
 
+    async def _capture_grid_target(
+        self,
+        *,
+        repair_id: str,
+        record: dict[str, Any],
+        target: dict[str, float],
+        target_number: int,
+        total: int,
+    ) -> dict[str, Any] | None:
+        """Move to and photograph a single photo-grid cell.
+
+        Returns the captured frame dict on success. On a known failure mode
+        (movement not confirmed, or no processed image after retries) the
+        target is appended to ``record["failed_targets"]``, a human-readable
+        reason is appended to ``record["failure_reasons"]``, a warning is
+        logged, and ``None`` is returned so the caller can move on to the
+        next target instead of aborting the whole batch. Any unexpected
+        exception (e.g. the move RPC itself failing) is left to propagate so
+        the caller can record and continue the same way.
+        """
+
+        def _record_failure(reason: str) -> None:
+            record["failed_targets"].append(target)
+            record.setdefault("failure_reasons", []).append(reason)
+            _LOGGER.warning(
+                "Photo-grid repair %s target %d/%d at X %.1f Y %.1f Z %.1f failed: %s",
+                repair_id,
+                target_number,
+                total,
+                target["x"],
+                target["y"],
+                target["z"],
+                reason,
+            )
+
+        before = {
+            int(item["id"])
+            for item in await self.api.async_get_images()
+            if isinstance(item, dict) and item.get("id") is not None
+        }
+        started_at = dt_util.utcnow()
+        record.update(
+            status="running",
+            message=(
+                "Moving safely to photo-grid cell "
+                f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f}"
+            ),
+            started_at=record.get("started_at") or started_at.isoformat(),
+            current_target=target,
+        )
+        # Movement is its own acknowledged RPC. Keeping take_photo out of the
+        # same multi-command request prevents a camera failure from allowing
+        # later targets to run at a stale position, which previously
+        # produced repeated images.
+        await self.async_rpc_request(
+            [
+                self._move_command(
+                    **target,
+                    speed=100,
+                    safe_z=True,
+                )
+            ],
+            timeout=SOIL_RPC_TIMEOUT_SECONDS,
+        )
+        reported_position = await self._wait_for_grid_position(
+            target=target,
+            timeout=GRID_REPAIR_POSITION_TIMEOUT_SECONDS,
+        )
+        record["reported_position"] = reported_position or self._reported_position()
+        if reported_position is None:
+            observed = record["reported_position"]
+            record["movement_failure"] = {
+                "requested_target": target,
+                "reported_position": observed,
+            }
+            observed_text = (
+                "unavailable"
+                if observed is None
+                else (f"X {observed['x']:.1f}, Y {observed['y']:.1f}, Z {observed['z']:.1f}")
+            )
+            _record_failure(
+                "FarmBot did not reach the requested photo-grid cell "
+                f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f}; "
+                f"last live position was {observed_text}. No photo was requested."
+            )
+            return None
+        record.update(
+            message=(
+                "FarmBot position confirmed at "
+                f"X {reported_position['x']:.1f}, "
+                f"Y {reported_position['y']:.1f}, "
+                f"Z {reported_position['z']:.1f}"
+            )
+        )
+        frame = None
+        for attempt in range(1, GRID_REPAIR_MAX_PHOTO_ATTEMPTS + 1):
+            record.update(
+                status="waiting_images",
+                message=(
+                    f"Taking photo {len(record['frames']) + 1} of {total} "
+                    f"(camera attempt {attempt}/{GRID_REPAIR_MAX_PHOTO_ATTEMPTS})"
+                ),
+                photo_attempt=attempt,
+            )
+            try:
+                await self.async_rpc_request(
+                    [
+                        {
+                            "kind": "wait",
+                            "args": {"milliseconds": SOIL_CAPTURE_SETTLE_MILLISECONDS},
+                        },
+                        {"kind": "take_photo", "args": {}},
+                    ],
+                    timeout=SOIL_RPC_TIMEOUT_SECONDS,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.warning(
+                    "Photo-grid repair %s photo RPC attempt %d/%d failed: %s",
+                    repair_id,
+                    attempt,
+                    GRID_REPAIR_MAX_PHOTO_ATTEMPTS,
+                    err,
+                )
+                continue
+            frame = await self._wait_for_grid_image(
+                before=before,
+                target=target,
+                started_at=started_at,
+                timeout=GRID_REPAIR_IMAGE_TIMEOUT_SECONDS,
+            )
+            if frame is not None:
+                break
+            _LOGGER.warning(
+                "Photo-grid repair %s got no processed image at "
+                "X %.1f Y %.1f Z %.1f on attempt %d/%d",
+                repair_id,
+                target["x"],
+                target["y"],
+                target["z"],
+                attempt,
+                GRID_REPAIR_MAX_PHOTO_ATTEMPTS,
+            )
+        if frame is None:
+            _record_failure(
+                "FarmBot did not produce a processed image at "
+                f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f} "
+                f"after {GRID_REPAIR_MAX_PHOTO_ATTEMPTS} attempts"
+            )
+            return None
+        return frame
+
     async def _run_grid_repair(
         self,
         *,
@@ -973,137 +1150,106 @@ class FarmbotManager:
                         ],
                         timeout=SOIL_RPC_TIMEOUT_SECONDS,
                     )
-                for target in targets:
-                    before = {
-                        int(item["id"])
-                        for item in await self.api.async_get_images()
-                        if isinstance(item, dict) and item.get("id") is not None
-                    }
-                    started_at = dt_util.utcnow()
-                    record.update(
-                        status="running",
-                        message=(
-                            "Moving safely to photo-grid cell "
-                            f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f}"
-                        ),
-                        started_at=record.get("started_at") or started_at.isoformat(),
-                        current_target=target,
-                    )
-                    # Movement is its own acknowledged RPC. Keeping take_photo
-                    # out of the same multi-command request prevents a camera
-                    # failure from allowing later targets to run at a stale
-                    # position, which previously produced repeated images.
-                    await self.async_rpc_request(
-                        [
-                            self._move_command(
-                                **target,
-                                speed=100,
-                                safe_z=True,
-                            )
-                        ],
-                        timeout=SOIL_RPC_TIMEOUT_SECONDS,
-                    )
-                    reported_position = await self._wait_for_grid_position(
-                        target=target,
-                        timeout=GRID_REPAIR_POSITION_TIMEOUT_SECONDS,
-                    )
-                    record["reported_position"] = reported_position or self._reported_position()
-                    if reported_position is None:
-                        observed = record["reported_position"]
-                        record["movement_failure"] = {
-                            "requested_target": target,
-                            "reported_position": observed,
-                        }
-                        record["failed_targets"].append(target)
-                        observed_text = (
-                            "unavailable"
-                            if observed is None
-                            else (
-                                f"X {observed['x']:.1f}, Y {observed['y']:.1f}, "
-                                f"Z {observed['z']:.1f}"
-                            )
+                total = len(targets)
+                consecutive_failures = 0
+                abort_reason: str | None = None
+                for index, target in enumerate(targets, start=1):
+                    state = self._live_connection_state()
+                    if not state["connected"] or state["locked"]:
+                        stop_reason = (
+                            "FarmBot is emergency-stopped"
+                            if state["locked"]
+                            else "FarmBot lost its MQTT connection"
                         )
-                        raise RuntimeError(
-                            "FarmBot did not reach the requested photo-grid cell "
-                            f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f}; "
-                            f"last live position was {observed_text}. No photo was requested."
+                        abort_reason = (
+                            f"Photo-grid repair stopped before cell {index}/{total}: "
+                            f"{stop_reason}"
                         )
-                    record.update(
-                        message=(
-                            "FarmBot position confirmed at "
-                            f"X {reported_position['x']:.1f}, "
-                            f"Y {reported_position['y']:.1f}, "
-                            f"Z {reported_position['z']:.1f}"
-                        )
-                    )
-                    frame = None
-                    for attempt in range(1, GRID_REPAIR_MAX_PHOTO_ATTEMPTS + 1):
-                        record.update(
-                            status="waiting_images",
-                            message=(
-                                f"Taking photo {len(record['frames']) + 1} of {len(targets)} "
-                                f"(camera attempt {attempt}/{GRID_REPAIR_MAX_PHOTO_ATTEMPTS})"
-                            ),
-                            photo_attempt=attempt,
-                        )
-                        try:
-                            await self.async_rpc_request(
-                                [
-                                    {
-                                        "kind": "wait",
-                                        "args": {"milliseconds": SOIL_CAPTURE_SETTLE_MILLISECONDS},
-                                    },
-                                    {"kind": "take_photo", "args": {}},
-                                ],
-                                timeout=SOIL_RPC_TIMEOUT_SECONDS,
-                            )
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as err:  # pylint: disable=broad-except
-                            _LOGGER.warning(
-                                "Photo-grid repair %s photo RPC attempt %d/%d failed: %s",
-                                repair_id,
-                                attempt,
-                                GRID_REPAIR_MAX_PHOTO_ATTEMPTS,
-                                err,
-                            )
-                            continue
-                        frame = await self._wait_for_grid_image(
-                            before=before,
-                            target=target,
-                            started_at=started_at,
-                            timeout=GRID_REPAIR_IMAGE_TIMEOUT_SECONDS,
-                        )
-                        if frame is not None:
-                            break
                         _LOGGER.warning(
-                            "Photo-grid repair %s got no processed image at "
-                            "X %.1f Y %.1f Z %.1f on attempt %d/%d",
+                            "Photo-grid repair %s aborted: %s", repair_id, stop_reason
+                        )
+                        break
+
+                    try:
+                        frame = await self._capture_grid_target(
+                            repair_id=repair_id,
+                            record=record,
+                            target=target,
+                            target_number=index,
+                            total=total,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as err:  # pylint: disable=broad-except
+                        frame = None
+                        reason = str(err)[:240] or "Unexpected error during photo-grid capture"
+                        record["failed_targets"].append(target)
+                        record.setdefault("failure_reasons", []).append(reason)
+                        _LOGGER.warning(
+                            "Photo-grid repair %s target %d/%d at X %.1f Y %.1f Z %.1f "
+                            "failed: %s",
                             repair_id,
+                            index,
+                            total,
                             target["x"],
                             target["y"],
                             target["z"],
-                            attempt,
-                            GRID_REPAIR_MAX_PHOTO_ATTEMPTS,
+                            reason,
                         )
-                    if frame is None:
-                        record["failed_targets"].append(target)
-                        raise TimeoutError(
-                            "FarmBot did not produce a processed image at "
-                            f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f} "
-                            f"after {GRID_REPAIR_MAX_PHOTO_ATTEMPTS} attempts"
+
+                    if frame is not None:
+                        record["frames"].append(frame)
+                        record["completed_targets"].append(target)
+                        consecutive_failures = 0
+                        continue
+
+                    consecutive_failures += 1
+                    if consecutive_failures >= GRID_REPAIR_MAX_CONSECUTIVE_FAILURES:
+                        abort_reason = (
+                            f"Photo-grid repair aborted after {consecutive_failures} "
+                            f"consecutive failed cells (of {total} requested)"
                         )
-                    record["frames"].append(frame)
-                    record["completed_targets"].append(target)
-                final_status = "complete"
-                final_message = (
-                    f"Verified {len(record['frames'])} photo-grid image(s) at "
-                    "the requested coordinates"
-                )
+                        _LOGGER.warning(
+                            "Photo-grid repair %s aborted: %s", repair_id, abort_reason
+                        )
+                        break
+
+                succeeded = len(record["frames"])
+                failed_targets = record["failed_targets"]
+                failure_reasons = record.get("failure_reasons") or []
+
+                def _summary() -> str:
+                    plural = "" if total == 1 else "s"
+                    text = f"Captured {succeeded} of {total} photo-grid cell{plural}"
+                    if failed_targets:
+                        text += f"; {len(failed_targets)} failed (first: {failure_reasons[0]})"
+                    return text
+
+                if abort_reason is not None:
+                    final_status = "failed"
+                    final_message = f"{abort_reason}. {_summary()}."
+                elif total > 0 and succeeded == total:
+                    final_status = "complete"
+                    final_message = (
+                        f"Verified {succeeded} photo-grid image(s) at "
+                        "the requested coordinates"
+                    )
+                else:
+                    final_status = "failed"
+                    final_message = _summary()
+                final_message = final_message[:240] or final_message
             except Exception as err:  # pylint: disable=broad-except
                 _LOGGER.warning("Photo-grid repair %s failed: %s", repair_id, err)
                 final_message = str(err)[:240] or final_message
             finally:
+                _LOGGER.info(
+                    "Photo-grid repair %s finished: requested %d target(s), "
+                    "captured %d frame(s), %d failed",
+                    repair_id,
+                    len(targets),
+                    len(record["frames"]),
+                    len(record["failed_targets"]),
+                )
                 if not initial_light_value:
                     try:
                         await self.async_rpc_request(
