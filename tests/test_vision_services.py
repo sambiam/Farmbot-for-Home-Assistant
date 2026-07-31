@@ -47,7 +47,11 @@ from custom_components.farmbot import (
     _async_remove_services_if_last_entry,
     _vision_response_service,
 )
-from custom_components.farmbot.const import EVENT_VISION_REQUEST, SIGNAL_VISION_STATE
+from custom_components.farmbot.const import (
+    EVENT_VISION_REQUEST,
+    INTEGRATION_VERSION,
+    SIGNAL_VISION_STATE,
+)
 from custom_components.farmbot.manager import FarmbotManager
 
 from .fake_api import FakeVisionApi
@@ -744,14 +748,19 @@ def test_list_bots_advertises_grid_repair_capability():
     _make_bot(hass)
     _async_register_services(hass)
     result = _run(_call(hass, SERVICE_LIST_VISION_BOTS, {}))
-    assert result["bots"][0]["integration_version"] == "2.5.0"
-    assert "photo_grid_repair" in result["bots"][0]["capabilities"]
-    assert "verified_photo_grid_repair" in result["bots"][0]["capabilities"]
-    assert "position_verified_photo_grid_repair" in result["bots"][0]["capabilities"]
-    assert "illuminated_photo_grid_capture" in result["bots"][0]["capabilities"]
-    assert "vision_image_deletion" in result["bots"][0]["capabilities"]
-    assert "continuous_photo_grid_capture" in result["bots"][0]["capabilities"]
-    assert "indexed_photo_grid_targets" in result["bots"][0]["capabilities"]
+    # Compared against the constant, not a literal: the app gates on advertised
+    # capabilities, and pinning the version string here only made every release
+    # bump look like a regression.
+    assert result["bots"][0]["integration_version"] == INTEGRATION_VERSION
+    capabilities = result["bots"][0]["capabilities"]
+    assert "photo_grid_repair" in capabilities
+    assert "verified_photo_grid_repair" in capabilities
+    assert "position_verified_photo_grid_repair" in capabilities
+    assert "illuminated_photo_grid_capture" in capabilities
+    assert "vision_image_deletion" in capabilities
+    assert "continuous_photo_grid_capture" in capabilities
+    assert "indexed_photo_grid_targets" in capabilities
+    assert "experimental_raw_gcode" in capabilities
 
 
 def test_apply_soil_height_requires_approval_and_detects_stale_point():

@@ -631,3 +631,49 @@ request_vision_analysis:
             - observe
             - recommend
             - auto_radius
+
+# EXPERIMENTAL. Sends raw firmware G-code to the Farmduino through FarmBot OS's
+# Lua `gcode()` escape hatch, bypassing FarmBot OS's motion planning. The
+# integration resolves and bounds-checks the whole program before any of it is
+# sent. `acknowledge_experimental` must be true, so this is awkward to reach by
+# accident from an automation.
+start_vision_gcode:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    lines:
+      required: true
+      selector:
+        object:
+    feed_mm_per_min:
+      selector:
+        number:
+          min: 1
+          max: 3000
+          unit_of_measurement: mm/min
+          mode: box
+    return_to_start:
+      selector:
+        boolean:
+    dry_run:
+      selector:
+        boolean:
+    acknowledge_experimental:
+      required: true
+      selector:
+        boolean:
+
+get_vision_gcode:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    run_id:
+      required: true
+      selector:
+        text:

@@ -19,6 +19,7 @@ from homeassistant.util import dt as dt_util
 
 from . import image_utils, vision
 from .api import FarmbotApiError, FarmbotAuthError
+from .gcode import GcodeError
 from .config_flow import FarmbotConfigFlow
 from .const import (
     DEFAULT_IMAGE_LOOKBACK_HOURS,
@@ -26,6 +27,10 @@ from .const import (
     DEFAULT_IMAGE_MAX_WIDTH,
     DOMAIN,
     EVENT_VISION_REQUEST,
+    GCODE_DEFAULT_FEED_MM_PER_MIN,
+    GCODE_MAX_FEED_MM_PER_MIN,
+    GCODE_MAX_LINES,
+    GCODE_MIN_FEED_MM_PER_MIN,
     GRID_REPAIR_MAX_TARGETS_PER_CALL,
     INTEGRATION_VERSION,
     MAX_IMAGE_DIMENSION,
@@ -41,6 +46,7 @@ from .const import (
     SERVICE_CREATE_VISION_WEED,
     SERVICE_DELETE_VISION_IMAGE,
     SERVICE_EXECUTE_SEQUENCE,
+    SERVICE_GET_VISION_GCODE,
     SERVICE_GET_VISION_GRID_REPAIR,
     SERVICE_GET_VISION_IMAGE,
     SERVICE_GET_VISION_INVENTORY,
@@ -51,6 +57,7 @@ from .const import (
     SERVICE_REMOVE_VISION_WEED,
     SERVICE_REPORT_VISION_STATUS,
     SERVICE_REQUEST_VISION_ANALYSIS,
+    SERVICE_START_VISION_GCODE,
     SERVICE_START_VISION_GRID_REPAIR,
     SERVICE_START_VISION_SOIL_CAPTURE,
     SERVICE_UPDATE_VISION_WEED_RADIUS,
@@ -217,6 +224,31 @@ SERVICE_DELETE_VISION_IMAGE_SCHEMA = vol.Schema(
     {
         vol.Required("config_entry_id"): cv.string,
         vol.Required("image_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+    }
+)
+
+SERVICE_START_VISION_GCODE_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("lines"): vol.All([cv.string], vol.Length(min=1, max=GCODE_MAX_LINES)),
+        vol.Optional("feed_mm_per_min", default=GCODE_DEFAULT_FEED_MM_PER_MIN): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=GCODE_MIN_FEED_MM_PER_MIN, max=GCODE_MAX_FEED_MM_PER_MIN),
+        ),
+        vol.Optional("return_to_start", default=True): cv.boolean,
+        # `dry_run` validates and returns the resolved program without moving.
+        vol.Optional("dry_run", default=False): cv.boolean,
+        # Raw G-code bypasses FarmBot OS's motion planning, so this must be set
+        # deliberately. It exists to make the path awkward to reach by accident
+        # from an automation that merely knows the service name.
+        vol.Required("acknowledge_experimental"): vol.All(cv.boolean, vol.In([True])),
+    }
+)
+
+SERVICE_GET_VISION_GCODE_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("run_id"): _cv_uuid,
     }
 )
 
@@ -797,6 +829,62 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if repair is None:
             return {"status": "failed", "message": "Photo-grid repair was not found"}
         return repair
+
+    async def start_vision_gcode(call: ServiceCall) -> dict:
+        """EXPERIMENTAL: run raw firmware G-code, bypassing FarmBot OS motion.
+
+        FarmBot OS applies no validation of its own on the Lua ``gcode()``
+        path, so the whole program is resolved and bounds-checked here first
+        and rejected as a unit. ``dry_run`` performs exactly that validation
+        and returns the resolved program without moving anything, which is
+        what the Vision app's preview uses.
+        """
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        firmware = await _safe_api_call(
+            manager,
+            manager.api.async_get_firmware_config(),
+            context="fetch motion configuration for raw G-code",
+        )
+        lines = list(call.data["lines"])
+        feed = float(call.data["feed_mm_per_min"])
+        try:
+            if call.data["dry_run"]:
+                program, _ = manager.plan_gcode(
+                    lines=lines, firmware_config=firmware, feed_mm_per_min=feed
+                )
+                extent = program.extent()
+                return {
+                    "status": "validated",
+                    "moves": len(program.moves),
+                    "total_distance_mm": round(program.total_distance_mm, 1),
+                    "feed_mm_per_min": program.feed_mm_per_min,
+                    "extent": {
+                        axis: [round(low, 1), round(high, 1)]
+                        for axis, (low, high) in extent.items()
+                    },
+                    "warnings": list(program.warnings),
+                    "message": f"Program is valid: {len(program.moves)} move(s)",
+                }
+            run_id = manager.start_gcode_run(
+                lines=lines,
+                firmware_config=firmware,
+                feed_mm_per_min=feed,
+                return_to_start=call.data["return_to_start"],
+            )
+        except GcodeError as err:
+            return {"status": "rejected", "message": str(err)[:240]}
+        return {
+            "status": "queued",
+            "run_id": run_id,
+            "message": "Raw G-code run queued",
+        }
+
+    async def get_vision_gcode(call: ServiceCall) -> dict:
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        run = manager.gcode_run(call.data["run_id"])
+        if run is None:
+            return {"status": "failed", "message": "Raw G-code run was not found"}
+        return run
 
     async def delete_vision_image(call: ServiceCall) -> dict:
         """Delete one image this FarmBot owns.
@@ -1444,6 +1532,20 @@ def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_DELETE_VISION_IMAGE,
         _vision_response_service(delete_vision_image),
         schema=SERVICE_DELETE_VISION_IMAGE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_START_VISION_GCODE,
+        _vision_response_service(start_vision_gcode),
+        schema=SERVICE_START_VISION_GCODE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_VISION_GCODE,
+        _vision_response_service(get_vision_gcode),
+        schema=SERVICE_GET_VISION_GCODE_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     hass.services.async_register(

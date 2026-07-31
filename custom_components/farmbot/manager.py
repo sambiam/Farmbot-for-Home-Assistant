@@ -15,6 +15,7 @@ from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
+from . import gcode as gcode_lib
 from . import vision
 from .api import FarmbotApiClient, FarmbotApiError
 from .const import (
@@ -23,6 +24,8 @@ from .const import (
     DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
     EVENT_BUTTON_INPUT,
     EVENT_VISION_REQUEST,
+    GCODE_CHUNK_RPC_TIMEOUT_SECONDS,
+    GCODE_DEFAULT_FEED_MM_PER_MIN,
     GRID_REPAIR_COORDINATE_TOLERANCE_MM,
     GRID_REPAIR_FLAT_TRAVEL_TOP_MARGIN_MM,
     GRID_REPAIR_IMAGE_TIMEOUT_SECONDS,
@@ -149,6 +152,8 @@ class FarmbotManager:
         self._claimed_soil_image_ids: set[int] = set()
         self.grid_repairs: dict[str, dict[str, Any]] = {}
         self._grid_repair_tasks: set[asyncio.Task] = set()
+        self.gcode_runs: dict[str, dict[str, Any]] = {}
+        self._gcode_tasks: set[asyncio.Task] = set()
 
     # -------------------- Token Refresh --------------------
     def _should_refresh_token(self) -> bool:
@@ -1428,6 +1433,172 @@ class FarmbotManager:
                     message=final_message,
                     completed_at=dt_util.utcnow().isoformat(),
                 )
+
+    # -------------------- Experimental raw G-code --------------------
+
+    def plan_gcode(
+        self, *, lines: list[str], firmware_config: dict[str, Any], feed_mm_per_min: float
+    ) -> tuple[gcode_lib.GcodeProgram, dict[str, Any]]:
+        """Validate a program against this bot without sending anything.
+
+        Split out from :meth:`start_gcode_run` so a caller can dry-run a
+        program -- the app previews one before every send -- and get the exact
+        same verdict the real run would give.
+        """
+        state = self.soil_motion_state(firmware_config)
+        if not state["connected"]:
+            raise gcode_lib.GcodeError("FarmBot is not connected")
+        if state["locked"]:
+            raise gcode_lib.GcodeError("FarmBot is emergency-stopped")
+        program = gcode_lib.parse_program(
+            lines,
+            start_position=state["position"],
+            axis_bounds=state["axis_bounds"],
+            firmware_config=firmware_config,
+            default_feed_mm_per_min=feed_mm_per_min or GCODE_DEFAULT_FEED_MM_PER_MIN,
+        )
+        return program, state
+
+    def start_gcode_run(
+        self,
+        *,
+        lines: list[str],
+        firmware_config: dict[str, Any],
+        feed_mm_per_min: float,
+        return_to_start: bool = True,
+    ) -> str:
+        """Validate a raw G-code program and start executing it.
+
+        The program is resolved and bounds-checked in full before the first
+        chunk is published, so a program that would leave the bed is refused
+        outright rather than stopped partway through.
+        """
+        program, state = self.plan_gcode(
+            lines=lines, firmware_config=firmware_config, feed_mm_per_min=feed_mm_per_min
+        )
+        self._gcode_tasks = {t for t in self._gcode_tasks if not t.done()}
+        self._grid_repair_tasks = {t for t in self._grid_repair_tasks if not t.done()}
+        self._soil_capture_tasks = {t for t in self._soil_capture_tasks if not t.done()}
+        if (
+            state["busy"]
+            or self._soil_capture_lock.locked()
+            or any(not task.done() for task in self._gcode_tasks)
+            or any(not task.done() for task in self._grid_repair_tasks)
+            or any(not task.done() for task in self._soil_capture_tasks)
+        ):
+            raise gcode_lib.GcodeError("FarmBot is busy")
+
+        run_id = str(uuid.uuid4())
+        extent = program.extent()
+        self.gcode_runs[run_id] = {
+            "run_id": run_id,
+            "status": "queued",
+            "message": "Raw G-code run queued",
+            "moves": len(program.moves),
+            "chunks_total": len(gcode_lib.lua_chunks(program.moves)),
+            "chunks_sent": 0,
+            "total_distance_mm": round(program.total_distance_mm, 1),
+            "feed_mm_per_min": program.feed_mm_per_min,
+            "start_position": {axis: round(value, 2) for axis, value in
+                               program.start_position.items()},
+            "extent": {axis: [round(low, 1), round(high, 1)]
+                       for axis, (low, high) in extent.items()},
+            "warnings": list(program.warnings),
+            "created_at": dt_util.utcnow().isoformat(),
+        }
+        task = asyncio.create_task(
+            self._run_gcode(
+                run_id=run_id,
+                program=program,
+                original_position=state["position"] if return_to_start else None,
+            ),
+            name=f"farmbot-gcode-{run_id}",
+        )
+        self._gcode_tasks.add(task)
+        task.add_done_callback(self._gcode_tasks.discard)
+        return run_id
+
+    async def _run_gcode(
+        self,
+        *,
+        run_id: str,
+        program: gcode_lib.GcodeProgram,
+        original_position: dict[str, Any] | None,
+    ) -> None:
+        """Publish each Lua chunk in order, aborting on disconnect or e-stop."""
+        record = self.gcode_runs[run_id]
+        chunks = gcode_lib.lua_chunks(program.moves)
+        final_status, final_message = "failed", "Raw G-code run failed"
+        async with self._soil_capture_lock:
+            try:
+                record.update(status="running", message="Executing raw G-code")
+                for index, chunk in enumerate(chunks, start=1):
+                    state = self._live_connection_state()
+                    if not state["connected"] or state["locked"]:
+                        stop_reason = (
+                            "FarmBot is emergency-stopped"
+                            if state["locked"]
+                            else "FarmBot lost its MQTT connection"
+                        )
+                        raise RuntimeError(
+                            f"Stopped after {index - 1} of {len(chunks)} chunks: {stop_reason}"
+                        )
+                    await self.async_rpc_request(
+                        [gcode_lib.lua_node(chunk)],
+                        timeout=GCODE_CHUNK_RPC_TIMEOUT_SECONDS,
+                    )
+                    record["chunks_sent"] = index
+                    record["message"] = f"Executed chunk {index} of {len(chunks)}"
+                final_status = "complete"
+                final_message = (
+                    f"Executed {len(program.moves)} raw G-code move(s) over "
+                    f"{program.total_distance_mm:.0f} mm"
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.warning("Raw G-code run %s failed: %s", run_id, err)
+                final_message = str(err)[:240] or final_message
+            finally:
+                _LOGGER.info(
+                    "Raw G-code run %s finished: %d/%d chunk(s) sent, %d move(s) planned",
+                    run_id,
+                    record["chunks_sent"],
+                    len(chunks),
+                    len(program.moves),
+                )
+                # Restoring position goes back through FarmBot OS's own planner
+                # (safe_z and all), deliberately: whatever the raw program did,
+                # the return trip should be the supervised kind of move.
+                if original_position is not None and all(
+                    original_position.get(axis) is not None for axis in ("x", "y", "z")
+                ):
+                    try:
+                        await self.async_rpc_request(
+                            [
+                                self._move_command(
+                                    **{
+                                        axis: float(original_position[axis])
+                                        for axis in ("x", "y", "z")
+                                    },
+                                    speed=100,
+                                    safe_z=True,
+                                )
+                            ],
+                            timeout=60,
+                        )
+                    except Exception as err:  # pylint: disable=broad-except
+                        _LOGGER.warning(
+                            "Could not restore position after G-code run %s: %s", run_id, err
+                        )
+                record.update(
+                    status=final_status,
+                    message=final_message,
+                    completed_at=dt_util.utcnow().isoformat(),
+                )
+
+    def gcode_run(self, run_id: str) -> dict[str, Any] | None:
+        return self.gcode_runs.get(run_id)
 
     def _reported_position(self) -> dict[str, float] | None:
         position = (self.status or {}).get("location_data", {}).get("position") or {}

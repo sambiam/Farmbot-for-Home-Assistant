@@ -30,7 +30,7 @@ VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
-INTEGRATION_VERSION = "2.5.0"
+INTEGRATION_VERSION = "2.6.0"
 VISION_CAPABILITIES = [
     "photo_grid_repair",
     "verified_photo_grid_repair",
@@ -46,6 +46,11 @@ VISION_CAPABILITIES = [
     # target and failed target is echoed back with it, so the caller tracks
     # cells by stable identity instead of by coordinate proximity.
     "indexed_photo_grid_targets",
+    # EXPERIMENTAL. Raw firmware G-code, forwarded to the Farmduino through
+    # FarmBot OS's Lua `gcode()` escape hatch. Bypasses FarmBot OS's motion
+    # planning entirely, so this integration validates the whole program
+    # itself before any of it is sent. See gcode.py.
+    "experimental_raw_gcode",
 ]
 
 # Service names (existing)
@@ -72,6 +77,8 @@ SERVICE_REMOVE_VISION_WEED = "remove_vision_weed"
 SERVICE_UPSERT_VISION_SPREAD_CURVE = "upsert_vision_spread_curve"
 SERVICE_REPORT_VISION_STATUS = "report_vision_status"
 SERVICE_REQUEST_VISION_ANALYSIS = "request_vision_analysis"
+SERVICE_START_VISION_GCODE = "start_vision_gcode"
+SERVICE_GET_VISION_GCODE = "get_vision_gcode"
 
 # Home Assistant event fired for farmbot.request_vision_analysis
 EVENT_VISION_REQUEST = "farmbot_vision_request"
@@ -178,6 +185,32 @@ GRID_REPAIR_FLAT_TRAVEL_TOP_MARGIN_MM = 25.0
 # disconnected, or the camera is dead; grinding through the rest of a large
 # grid is pointless, so the batch aborts early instead.
 GRID_REPAIR_MAX_CONSECUTIVE_FAILURES = 5
+
+# --------------------------------------------------------------------------
+# Experimental raw G-code execution (see gcode.py)
+#
+# This path reaches the Farmduino through FarmBot OS's Lua `gcode()` function,
+# which applies no validation of its own. Every limit below is therefore a real
+# safety bound, not a nicety: nothing else sits between a caller's text and the
+# stepper drivers.
+# --------------------------------------------------------------------------
+GCODE_MAX_LINES = 2000
+GCODE_MAX_MOVES = 1000
+# `gcode()` blocks until the firmware answers, so one Lua node holding a whole
+# shape would keep a single RPC open for the entire run. Twenty calls per node
+# bounds each acknowledgement and gives the caller progress between chunks.
+GCODE_CALLS_PER_LUA_CHUNK = 20
+GCODE_CHUNK_RPC_TIMEOUT_SECONDS = 240
+GCODE_DEFAULT_FEED_MM_PER_MIN = 400.0
+GCODE_MIN_FEED_MM_PER_MIN = 1.0
+# Roughly FarmBot's own maximum traverse. Higher belongs in firmware config,
+# not in a program that arrives over a service call.
+GCODE_MAX_FEED_MM_PER_MIN = 3000.0
+# Firmware speeds are steps/second. The floor keeps a very short segment from
+# asking for ~0 steps/second; the fallback ceiling applies only when
+# `movement_max_spd_*` is missing, where "unknown" must mean slow.
+GCODE_MIN_STEPS_PER_SECOND = 10.0
+GCODE_FALLBACK_MAX_STEPS_PER_SECOND = 800.0
 
 # Decompression-bomb guards applied to the *decoded* source image, before any
 # resize. A native FarmBot frame is 2592x1944 (~5 MP); these limits leave

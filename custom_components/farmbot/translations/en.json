@@ -4,12 +4,18 @@
       "user": {
         "title": "FarmBot",
         "description": "Sign in to FarmBot",
-        "data": { "email": "Email", "password": "Password" }
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
       },
       "reauth_confirm": {
         "title": "Reauthenticate FarmBot",
         "description": "Your FarmBot token has expired or authentication failed. Please sign in again to continue. Device: {device_id}",
-        "data": { "email": "Email", "password": "Password" }
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
       }
     },
     "error": {
@@ -449,6 +455,50 @@
         "mode": {
           "name": "Mode",
           "description": "Analysis mode: observe, recommend, or auto_radius."
+        }
+      }
+    },
+    "start_vision_gcode": {
+      "name": "Start Vision raw G-code (experimental)",
+      "description": "EXPERIMENTAL. Send raw firmware G-code straight to the Farmduino, bypassing FarmBot OS motion planning. The integration validates and bounds-checks the whole program before any of it is sent.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot to run the program on."
+        },
+        "lines": {
+          "name": "G-code lines",
+          "description": "The program, one line per entry. Supported: G21, G90, G91, G00 (X/Y/Z/F/A/B/C) and a standalone F."
+        },
+        "feed_mm_per_min": {
+          "name": "Feed rate",
+          "description": "Default travel speed in mm/min, used for any move that does not set F itself."
+        },
+        "return_to_start": {
+          "name": "Return to start",
+          "description": "Move back to the starting position (through FarmBot OS, with safe Z) when the program ends."
+        },
+        "dry_run": {
+          "name": "Dry run",
+          "description": "Validate the program and report what it would do without moving."
+        },
+        "acknowledge_experimental": {
+          "name": "Acknowledge experimental",
+          "description": "Must be true. Raw G-code bypasses FarmBot OS safety handling."
+        }
+      }
+    },
+    "get_vision_gcode": {
+      "name": "Get Vision raw G-code run",
+      "description": "Return the status of a queued raw G-code run.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot that owns the run."
+        },
+        "run_id": {
+          "name": "Run ID",
+          "description": "UUID returned by Start Vision raw G-code."
         }
       }
     }

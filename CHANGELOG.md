@@ -3,6 +3,34 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.6.0 - 2026-07-31
+
+- **Added (experimental):** `farmbot.start_vision_gcode` and
+  `farmbot.get_vision_gcode` execute raw firmware G-code, advertised as the
+  `experimental_raw_gcode` capability. FarmBot OS accepts only CeleryScript on
+  its normal path, so the program is delivered through FarmBot OS v15's Lua
+  `gcode()` function, which forwards a command to the Farmduino verbatim. This
+  bypasses FarmBot OS's motion planning entirely.
+- **Added:** `custom_components/farmbot/gcode.py`, which is the only validation
+  on that path and therefore does all of it: a small allowlist (`G21`, `G90`,
+  `G91`, `G00`, and a modal `F`) with every rejection named, whole-program
+  bounds checking against the axis lengths in firmware config, and conversion
+  of a conventional `F` feed rate in mm/min into the per-axis `A`/`B`/`C`
+  speeds in steps/second the firmware actually takes. Per-axis speeds are
+  scaled so all axes finish together: the firmware does not implement `G01`,
+  and `G00` is explicitly not guaranteed to travel in a straight line, so
+  without that scaling the short axis arrives first and a segment dog-legs.
+  Speeds are clamped to `movement_max_spd_*`, or to a deliberately slow
+  fallback when firmware config does not report one.
+- **Added:** `dry_run: true` validates a program and reports its move count,
+  path length and bounding box without moving anything.
+- **Safety:** a run requires `acknowledge_experimental: true`, refuses to start
+  unless the bot is connected, unlocked and idle, refuses a program whose start
+  position is unknown, rejects an out-of-bounds program as a unit before
+  publishing anything, aborts between chunks on disconnect or emergency stop,
+  and returns to the starting position through FarmBot OS's own supervised
+  movement (with `safe_z`) rather than over the raw path.
+
 ## 2.5.1 - 2026-07-31
 
 - **Fixed:** `farmbot.get_vision_inventory` now returns active FarmBot Weed
