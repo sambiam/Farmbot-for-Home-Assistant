@@ -19,7 +19,6 @@ from homeassistant.util import dt as dt_util
 
 from . import image_utils, vision
 from .api import FarmbotApiError, FarmbotAuthError
-from .gcode import GcodeError
 from .config_flow import FarmbotConfigFlow
 from .const import (
     DEFAULT_IMAGE_LOOKBACK_HOURS,
@@ -70,6 +69,7 @@ from .const import (
     VISION_IMAGE_POLL_INTERVAL_SECONDS,
     VISION_STATUS_VALUES,
 )
+from .gcode import GcodeError
 from .manager import FarmbotManager
 
 _LOGGER = logging.getLogger(__name__)
