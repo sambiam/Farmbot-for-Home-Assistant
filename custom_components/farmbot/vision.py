@@ -40,6 +40,7 @@ PLANT_FIELDS = (
     "planted_at",
     "spread_curve_id",
 )
+WEED_FIELDS = ("id", "name", "x", "y", "z", "radius")
 CURVE_FIELDS = ("id", "name", "type", "data")
 
 
@@ -92,6 +93,11 @@ def filter_active_plants(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def project_plant(point: dict[str, Any]) -> dict[str, Any]:
     """Trim a FarmBot point down to the fields the Vision app needs."""
     return {field: point.get(field) for field in PLANT_FIELDS}
+
+
+def project_weed(point: dict[str, Any]) -> dict[str, Any]:
+    """Trim a FarmBot Weed point down to the fields the Vision app needs."""
+    return {field: point.get(field) for field in WEED_FIELDS}
 
 
 # -------------------- images --------------------

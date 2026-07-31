@@ -44,6 +44,22 @@ def test_project_plant_only_includes_documented_fields():
     assert projected["name"] == "Tomato 1"
 
 
+def test_project_weed_only_includes_vision_map_fields():
+    point = dict(
+        WEED_POINT,
+        name=None,
+        x=120,
+        y=340,
+        z=0,
+        radius=18,
+        secret_field="leaked?",
+    )
+    projected = vision.project_weed(point)
+    assert set(projected) == set(vision.WEED_FIELDS)
+    assert "secret_field" not in projected
+    assert projected["radius"] == 18
+
+
 # --------------------------- image lookback filtering ---------------------------
 
 NOW = datetime(2026, 7, 17, 12, 0, 0, tzinfo=timezone.utc)

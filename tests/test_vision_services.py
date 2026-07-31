@@ -189,6 +189,16 @@ def test_get_vision_inventory_filters_plants_images_and_curves():
                 "planted_at": recent,
             },
             {"id": 2, "device_id": "42", "pointer_type": "Plant", "plant_stage": "harvested"},
+            {
+                "id": 3,
+                "device_id": "42",
+                "pointer_type": "Weed",
+                "name": None,
+                "x": 10,
+                "y": 20,
+                "z": 0,
+                "radius": 15,
+            },
         ],
         images=[
             {
@@ -227,6 +237,9 @@ def test_get_vision_inventory_filters_plants_images_and_curves():
     result = _run(_call(hass, SERVICE_GET_VISION_INVENTORY, {"config_entry_id": "entry-1"}))
 
     assert [p["id"] for p in result["plants"]] == [1]
+    assert result["weeds"] == [
+        {"id": 3, "name": None, "x": 10, "y": 20, "z": 0, "radius": 15}
+    ]
     assert [i["id"] for i in result["images"]] == [10]
     assert {c["id"] for c in result["curves"]} == {5, 6}
     assert "attachment_url" not in str(result["images"])

@@ -3,6 +3,13 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.5.1 - 2026-07-31
+
+- **Fixed:** `farmbot.get_vision_inventory` now returns active FarmBot Weed
+  points in its documented `weeds` list, allowing the Vision app's calibration
+  and most-recent photo grids to draw every known weed with its stored radius
+  and centre.
+
 ## 2.5.0 - 2026-07-29
 
 - **Changed:** `farmbot.start_vision_grid_repair` now accepts up to 256 targets
