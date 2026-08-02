@@ -617,7 +617,10 @@ def _async_register_services(hass: HomeAssistant) -> None:
             "device_id": manager.device_id,
             "generated_at": now.isoformat(),
             "plants": [vision.project_plant(p) for p in plants],
-            "weeds": [vision.project_weed(w) for w in weeds],
+            # Defend against API clients or proxies that ignore the
+            # pointer_type query parameter. Never present a Plant, Generic
+            # point, ToolSlot, or soil point as a weed candidate.
+            "weeds": [vision.project_weed(w) for w in weeds if w.get("pointer_type") == "Weed"],
             "images": [vision.project_image(i) for i in recent_images],
             "curves": vision.select_relevant_curves(plants, curves, include_all=include_all_curves),
             "camera_calibration": calibration,

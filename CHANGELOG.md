@@ -3,6 +3,24 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.8.1 - 2026-08-03
+
+- Reworked soil calibration and measurement capture into a verified per-frame
+  sequence. Each target is reached and position-checked within 5 mm before a
+  1.5-second settling delay and illuminated photo.
+- Every photo must finish processing, match the requested coordinates, decode,
+  and pass washed-out and severe-blur checks before the gantry advances.
+- A rejected frame is retried in place up to five attempts. Exhausted retries
+  abort the run with the exact frame, attempt count, and rejection reason;
+  lighting and the original gantry position are restored once at the end.
+
+## 2.8.0 - 2026-08-03
+
+- **Fixed:** Weed inventory responses now retain `pointer_type` and apply an
+  explicit server-side `Weed` check, preventing plants, soil points,
+  ToolSlots, and generic points from reaching weeding candidate lists even if
+  an API proxy ignores the requested point-type filter.
+
 ## 2.7.0 - 2026-08-02
 
 - **Added:** Purpose-built `start_vision_weeding` and `get_vision_weeding`

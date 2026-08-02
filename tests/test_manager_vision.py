@@ -6,11 +6,13 @@ real (base-URL resolution is pure/local) but never invoked here.
 
 import asyncio
 from datetime import timedelta
+from unittest.mock import patch
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.util import dt as dt_util
 
 from custom_components.farmbot.const import EVENT_VISION_REQUEST, SIGNAL_VISION_STATE
+from custom_components.farmbot.image_utils import CaptureImageQuality
 from custom_components.farmbot.manager import FarmbotManager
 
 from .fake_api import FakeVisionApi
@@ -32,6 +34,162 @@ def _make_manager(options=None):
     )
     manager = FarmbotManager(hass, "tok", "42", "mqtt.example.com", entry=entry)
     return hass, manager, entry
+
+
+def test_soil_capture_retries_a_bad_photo_in_place_before_advancing():
+    async def scenario():
+        _, manager, _ = _make_manager()
+        manager.status = {
+            "location_data": {"position": {"x": 10, "y": 20, "z": 0}},
+            "informational_settings": {"busy": False, "locked": False},
+            "pins": {"7": {"value": 0}},
+        }
+        calls = []
+        image_id = 0
+
+        async def fake_rpc(commands, **_kwargs):
+            calls.append(commands)
+            return {"kind": "rpc_ok"}
+
+        async def fake_images():
+            return []
+
+        async def fake_position(**kwargs):
+            return {axis: float(kwargs["target"][axis]) for axis in ("x", "y", "z")}
+
+        async def fake_image(**kwargs):
+            nonlocal image_id
+            image_id += 1
+            target = kwargs["target"]
+            image = {
+                "id": image_id,
+                "attachment_url": f"https://example.com/{image_id}.jpg",
+            }
+            frame = {
+                "image_id": image_id,
+                **target,
+                "distance_from_target_mm": 0,
+            }
+            return frame, image, "usable"
+
+        async def fake_download(_url):
+            return b"jpeg", "image/jpeg"
+
+        manager.async_rpc_request = fake_rpc
+        manager.api.async_get_images = fake_images
+        manager.api.async_download_image = fake_download
+        manager._wait_for_grid_position = fake_position
+        manager._wait_for_soil_frame_image = fake_image
+        manager.soil_captures["soil"] = {
+            "capture_id": "soil",
+            "status": "queued",
+            "message": "queued",
+            "frames": [],
+            "created_at": dt_util.utcnow().isoformat(),
+        }
+        qualities = [
+            CaptureImageQuality(False, "image was blurry"),
+            *[CaptureImageQuality(True, "usable", contrast=20, laplacian_energy=30)] * 3,
+        ]
+        with patch(
+            "custom_components.farmbot.manager.inspect_capture_image",
+            side_effect=qualities,
+        ):
+            await manager._run_soil_capture(
+                capture_id="soil",
+                point={"x": 100, "y": 200},
+                capture_z=0,
+                lateral_offsets=[-15, 0, 15],
+                z_offsets=[0],
+                z_direction=-1,
+                original_position={"x": 10, "y": 20, "z": 0},
+            )
+
+        record = manager.soil_captures["soil"]
+        assert record["status"] == "complete"
+        assert len(record["frames"]) == 3
+        assert record["frames"][0]["capture_attempt"] == 2
+        assert record["attempts"] == [
+            {"frame": 1, "attempt": 1, "reason": "image was blurry"}
+        ]
+        command_kinds = [[item["kind"] for item in group] for group in calls]
+        assert command_kinds.count(["move"]) == 4  # three frames plus one final restore
+        assert command_kinds.count(["wait", "take_photo"]) == 4
+        assert command_kinds[0] == ["write_pin"]
+        assert command_kinds[-2:] == [["write_pin"], ["move"]]
+
+    _run(scenario())
+
+
+def test_soil_capture_aborts_after_five_bad_photos_without_advancing():
+    async def scenario():
+        _, manager, _ = _make_manager()
+        manager.status = {
+            "location_data": {"position": {"x": 10, "y": 20, "z": 0}},
+            "informational_settings": {"busy": False, "locked": False},
+            "pins": {"7": {"value": 0}},
+        }
+        calls = []
+        image_id = 0
+
+        async def fake_rpc(commands, **_kwargs):
+            calls.append(commands)
+            return {"kind": "rpc_ok"}
+
+        async def fake_images():
+            return []
+
+        async def fake_position(**kwargs):
+            return dict(kwargs["target"])
+
+        async def fake_image(**kwargs):
+            nonlocal image_id
+            image_id += 1
+            target = kwargs["target"]
+            return (
+                {"image_id": image_id, **target, "distance_from_target_mm": 0},
+                {"id": image_id, "attachment_url": f"https://example.com/{image_id}.jpg"},
+                "usable",
+            )
+
+        async def fake_download(_url):
+            return b"jpeg", "image/jpeg"
+
+        manager.async_rpc_request = fake_rpc
+        manager.api.async_get_images = fake_images
+        manager.api.async_download_image = fake_download
+        manager._wait_for_grid_position = fake_position
+        manager._wait_for_soil_frame_image = fake_image
+        manager.soil_captures["soil"] = {
+            "capture_id": "soil",
+            "status": "queued",
+            "message": "queued",
+            "frames": [],
+            "created_at": dt_util.utcnow().isoformat(),
+        }
+        with patch(
+            "custom_components.farmbot.manager.inspect_capture_image",
+            return_value=CaptureImageQuality(False, "image was washed out"),
+        ):
+            await manager._run_soil_capture(
+                capture_id="soil",
+                point={"x": 100, "y": 200},
+                capture_z=0,
+                lateral_offsets=[-15, 0, 15],
+                z_offsets=[0],
+                z_direction=-1,
+                original_position={"x": 10, "y": 20, "z": 0},
+            )
+
+        record = manager.soil_captures["soil"]
+        assert record["status"] == "failed"
+        assert "frame 1/3 failed after 5 attempts" in record["message"]
+        assert len(record["attempts"]) == 5
+        command_kinds = [[item["kind"] for item in group] for group in calls]
+        assert command_kinds.count(["move"]) == 2  # target once plus final restore
+        assert command_kinds.count(["wait", "take_photo"]) == 5
+
+    _run(scenario())
 
 
 def test_grid_repair_moves_takes_photos_and_restores_position():

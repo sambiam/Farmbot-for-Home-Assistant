@@ -18,6 +18,26 @@ def _make_jpeg_bytes(size=(1200, 800), color=(255, 0, 0), exif=None):
     return buf.getvalue()
 
 
+def test_capture_quality_rejects_empty_and_washed_out_images():
+    assert not image_utils.inspect_capture_image(b"").usable
+    quality = image_utils.inspect_capture_image(_make_jpeg_bytes(color=(255, 255, 255)))
+    assert not quality.usable
+    assert "washed out" in quality.reason
+
+
+def test_capture_quality_accepts_a_detailed_image():
+    image = Image.new("RGB", (320, 240), (80, 70, 60))
+    for x in range(0, 320, 16):
+        for y in range(0, 240, 16):
+            color = (30, 120, 45) if (x // 16 + y // 16) % 2 else (150, 105, 55)
+            for px in range(x, min(x + 8, 320)):
+                for py in range(y, min(y + 8, 240)):
+                    image.putpixel((px, py), color)
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG")
+    assert image_utils.inspect_capture_image(buffer.getvalue()).usable
+
+
 # --------------------------- PIL import surface ---------------------------
 
 def test_pil_image_and_imageops_importable():

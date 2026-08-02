@@ -41,8 +41,13 @@ from .const import (
     SIGNAL_SEQUENCE_SELECTED,
     SIGNAL_STATE,
     SIGNAL_VISION_STATE,
+    SOIL_CAPTURE_COORDINATE_TOLERANCE_MM,
+    SOIL_CAPTURE_IMAGE_TIMEOUT_SECONDS,
+    SOIL_CAPTURE_LIGHTING_PIN,
+    SOIL_CAPTURE_MAX_PHOTO_ATTEMPTS,
+    SOIL_CAPTURE_POSITION_TIMEOUT_SECONDS,
+    SOIL_CAPTURE_POSITION_TOLERANCE_MM,
     SOIL_CAPTURE_SETTLE_MILLISECONDS,
-    SOIL_IMAGE_TIMEOUT_SECONDS,
     SOIL_RPC_TIMEOUT_SECONDS,
     TOKEN_REFRESH_WINDOW,
     TOPIC_COMMAND,
@@ -53,6 +58,7 @@ from .const import (
     WEEDING_MAX_PATH_MM,
     WEEDING_RPC_TIMEOUT_SECONDS,
 )
+from .image_utils import inspect_capture_image
 from .jwt_util import decode_jwt_payload
 
 _LOGGER = logging.getLogger(__name__)
@@ -817,6 +823,10 @@ class FarmbotManager:
         original_position: dict[str, Any],
     ) -> None:
         record = self.soil_captures[capture_id]
+        light_state = (self.status or {}).get("pins", {}).get(str(SOIL_CAPTURE_LIGHTING_PIN), 0)
+        initial_light_value = int(
+            bool(light_state.get("value", 0) if isinstance(light_state, dict) else light_state)
+        )
         async with self._soil_capture_lock:
             final_status = "failed"
             final_message = "Soil capture failed"
@@ -828,7 +838,7 @@ class FarmbotManager:
                 }
                 record["before_image_ids"] = sorted(before)
                 started_at = dt_util.utcnow()
-                commands, expected = self._soil_capture_commands(
+                _commands, expected = self._soil_capture_commands(
                     x=float(point["x"]),
                     y=float(point["y"]),
                     capture_z=capture_z,
@@ -838,20 +848,169 @@ class FarmbotManager:
                 )
                 record.update(
                     status="running",
-                    message="FarmBot is moving and taking soil images",
+                    message="Preparing verified soil image capture",
                     expected_frames=expected,
                     started_at=started_at.isoformat(),
+                    attempts=[],
                 )
-                await self.async_rpc_request(commands)
-                record.update(
-                    status="waiting_images",
-                    message="Waiting for FarmBot image processing",
-                )
-                record["frames"] = await self._wait_for_soil_images(
-                    before=before,
-                    expected=expected,
-                    started_at=started_at,
-                )
+                if not initial_light_value:
+                    await self.async_rpc_request(
+                        [
+                            {
+                                "kind": "write_pin",
+                                "args": {
+                                    "pin_number": SOIL_CAPTURE_LIGHTING_PIN,
+                                    "pin_value": 1,
+                                    "pin_mode": 0,
+                                },
+                            }
+                        ],
+                        timeout=SOIL_RPC_TIMEOUT_SECONDS,
+                    )
+                    _LOGGER.info(
+                        "Soil capture %s switched lighting pin %d on",
+                        capture_id,
+                        SOIL_CAPTURE_LIGHTING_PIN,
+                    )
+
+                total = len(expected)
+                for frame_number, target in enumerate(expected, start=1):
+                    record.update(
+                        status="running",
+                        message=(
+                            f"Moving to soil frame {frame_number}/{total} at "
+                            f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f}"
+                        ),
+                        current_frame=frame_number,
+                    )
+                    coordinates = {axis: float(target[axis]) for axis in ("x", "y", "z")}
+                    await self.async_rpc_request(
+                        [self._move_command(**coordinates, speed=100, safe_z=True)],
+                        timeout=SOIL_RPC_TIMEOUT_SECONDS,
+                    )
+                    reported = await self._wait_for_grid_position(
+                        target=target,
+                        timeout=SOIL_CAPTURE_POSITION_TIMEOUT_SECONDS,
+                        tolerance_mm=SOIL_CAPTURE_POSITION_TOLERANCE_MM,
+                    )
+                    if reported is None:
+                        observed = self._reported_position()
+                        observed_text = (
+                            "unavailable"
+                            if observed is None
+                            else (
+                                f"X {observed['x']:.1f}, Y {observed['y']:.1f}, "
+                                f"Z {observed['z']:.1f}"
+                            )
+                        )
+                        raise RuntimeError(
+                            f"soil frame {frame_number}/{total}: FarmBot did not reach "
+                            f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f} "
+                            f"within {SOIL_CAPTURE_POSITION_TOLERANCE_MM:g} mm; "
+                            f"last position was {observed_text}"
+                        )
+
+                    accepted = None
+                    last_reason = "camera did not produce an image"
+                    for attempt in range(1, SOIL_CAPTURE_MAX_PHOTO_ATTEMPTS + 1):
+                        attempt_started = dt_util.utcnow()
+                        record.update(
+                            status="waiting_images",
+                            message=(
+                                f"Soil frame {frame_number}/{total}: capture attempt "
+                                f"{attempt}/{SOIL_CAPTURE_MAX_PHOTO_ATTEMPTS}"
+                            ),
+                            photo_attempt=attempt,
+                        )
+                        try:
+                            await self.async_rpc_request(
+                                [
+                                    {
+                                        "kind": "wait",
+                                        "args": {
+                                            "milliseconds": SOIL_CAPTURE_SETTLE_MILLISECONDS
+                                        },
+                                    },
+                                    {"kind": "take_photo", "args": {}},
+                                ],
+                                timeout=SOIL_RPC_TIMEOUT_SECONDS,
+                            )
+                            frame, image, reason = await self._wait_for_soil_frame_image(
+                                before=before,
+                                target=target,
+                                started_at=attempt_started,
+                                timeout=SOIL_CAPTURE_IMAGE_TIMEOUT_SECONDS,
+                            )
+                            if image is not None and image.get("id") is not None:
+                                image_id = int(image["id"])
+                                before.add(image_id)
+                                self._claimed_soil_image_ids.add(image_id)
+                            if frame is None or image is None:
+                                last_reason = reason
+                            else:
+                                attachment_url = image.get("attachment_url")
+                                if not attachment_url:
+                                    last_reason = "processed image had no downloadable attachment"
+                                else:
+                                    raw, _content_type = await self.api.async_download_image(
+                                        str(attachment_url)
+                                    )
+                                    quality = await self.hass.async_add_executor_job(
+                                        inspect_capture_image, raw
+                                    )
+                                    if quality.usable:
+                                        accepted = {
+                                            **frame,
+                                            "capture_attempt": attempt,
+                                            "quality": "usable",
+                                            "contrast": quality.contrast,
+                                            "detail_score": quality.laplacian_energy,
+                                        }
+                                        break
+                                    last_reason = quality.reason
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as err:  # pylint: disable=broad-except
+                            last_reason = str(err)[:180] or type(err).__name__
+
+                        attempt_record = {
+                            "frame": frame_number,
+                            "attempt": attempt,
+                            "reason": last_reason,
+                        }
+                        record["attempts"].append(attempt_record)
+                        record["message"] = (
+                            f"Soil frame {frame_number}/{total} attempt {attempt}/"
+                            f"{SOIL_CAPTURE_MAX_PHOTO_ATTEMPTS} rejected: {last_reason}"
+                        )[:240]
+                        _LOGGER.warning(
+                            "Soil capture %s frame %d/%d attempt %d/%d rejected: %s",
+                            capture_id,
+                            frame_number,
+                            total,
+                            attempt,
+                            SOIL_CAPTURE_MAX_PHOTO_ATTEMPTS,
+                            last_reason,
+                        )
+
+                    if accepted is None:
+                        raise RuntimeError(
+                            f"soil frame {frame_number}/{total} failed after "
+                            f"{SOIL_CAPTURE_MAX_PHOTO_ATTEMPTS} attempts: {last_reason}"
+                        )
+                    record["frames"].append(accepted)
+                    _LOGGER.info(
+                        "Soil capture %s accepted frame %d/%d image %s on attempt %d at "
+                        "X %.1f Y %.1f Z %.1f",
+                        capture_id,
+                        frame_number,
+                        total,
+                        accepted["image_id"],
+                        accepted["capture_attempt"],
+                        accepted["x"],
+                        accepted["y"],
+                        accepted["z"],
+                    )
                 final_status = "complete"
                 final_message = f"Captured {len(record['frames'])} soil images"
                 record.update(message="Restoring the FarmBot starting position")
@@ -860,6 +1019,27 @@ class FarmbotManager:
                 final_message = str(err)[:240] or "Soil capture failed"
                 record.update(message="Capture failed; restoring the FarmBot position")
             finally:
+                if not initial_light_value:
+                    try:
+                        await self.async_rpc_request(
+                            [
+                                {
+                                    "kind": "write_pin",
+                                    "args": {
+                                        "pin_number": SOIL_CAPTURE_LIGHTING_PIN,
+                                        "pin_value": 0,
+                                        "pin_mode": 0,
+                                    },
+                                }
+                            ],
+                            timeout=SOIL_RPC_TIMEOUT_SECONDS,
+                        )
+                    except Exception as err:  # pylint: disable=broad-except
+                        _LOGGER.warning(
+                            "Could not restore lighting after soil capture %s: %s",
+                            capture_id,
+                            err,
+                        )
                 if all(original_position.get(axis) is not None for axis in ("x", "y", "z")):
                     try:
                         await self.async_rpc_request(
@@ -886,6 +1066,74 @@ class FarmbotManager:
                     message=final_message,
                     completed_at=dt_util.utcnow().isoformat(),
                 )
+
+    async def _wait_for_soil_frame_image(
+        self,
+        *,
+        before: set[int],
+        target: dict[str, float],
+        started_at,
+        timeout: float,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+        """Wait for one new processed image and validate its recorded coordinates."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            images = await self.api.async_get_images()
+            candidates: list[tuple[float, dict[str, Any]]] = []
+            for image in images:
+                if not isinstance(image, dict) or not vision.is_image_ready(image):
+                    continue
+                try:
+                    image_id = int(image["id"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if image_id in before or not vision.same_device(
+                    image.get("device_id"), self.device_id
+                ):
+                    continue
+                created = dt_util.parse_datetime(str(image.get("created_at") or ""))
+                if created is not None:
+                    try:
+                        if created < started_at:
+                            continue
+                    except TypeError:
+                        continue
+                meta = self._image_meta(image)
+                try:
+                    distance = math.sqrt(
+                        sum(
+                            (float(meta[axis]) - float(target[axis])) ** 2
+                            for axis in ("x", "y", "z")
+                        )
+                    )
+                except (KeyError, TypeError, ValueError):
+                    continue
+                candidates.append((distance, image))
+            if candidates:
+                distance, image = min(candidates, key=lambda item: item[0])
+                meta = self._image_meta(image)
+                if distance > SOIL_CAPTURE_COORDINATE_TOLERANCE_MM:
+                    return (
+                        None,
+                        image,
+                        f"image coordinates missed the target by {distance:.1f} mm "
+                        f"(limit {SOIL_CAPTURE_COORDINATE_TOLERANCE_MM:g} mm)",
+                    )
+                return (
+                    {
+                        "image_id": int(image["id"]),
+                        "x": float(meta["x"]),
+                        "y": float(meta["y"]),
+                        "z": float(meta.get("z") or 0),
+                        "lateral_offset_mm": float(target["lateral_offset_mm"]),
+                        "z_offset_mm": float(target["z_offset_mm"]),
+                        "distance_from_target_mm": distance,
+                    },
+                    image,
+                    "usable",
+                )
+            await asyncio.sleep(2)
+        return None, None, "no new processed image appeared before the upload timeout"
 
     @staticmethod
     def _image_meta(image: dict[str, Any]) -> dict[str, Any]:
@@ -926,43 +1174,6 @@ class FarmbotManager:
                 }
             )
         return matched
-
-    async def _wait_for_soil_images(
-        self,
-        *,
-        before: set[int],
-        expected: list[dict[str, float]],
-        started_at,
-    ) -> list[dict[str, Any]]:
-        deadline = asyncio.get_running_loop().time() + SOIL_IMAGE_TIMEOUT_SECONDS
-        while asyncio.get_running_loop().time() < deadline:
-            images = await self.api.async_get_images()
-            candidates = []
-            for image in images:
-                if not isinstance(image, dict) or not vision.is_image_ready(image):
-                    continue
-                try:
-                    image_id = int(image["id"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-                if image_id in before or not vision.same_device(
-                    image.get("device_id"), self.device_id
-                ):
-                    continue
-                created = dt_util.parse_datetime(str(image.get("created_at") or ""))
-                if created is not None:
-                    try:
-                        if created < started_at:
-                            continue
-                    except TypeError:
-                        continue
-                candidates.append(image)
-            matched = self._match_soil_frames(candidates, expected)
-            self._claimed_soil_image_ids.update(frame["image_id"] for frame in matched)
-            if len(matched) == len(expected):
-                return matched
-            await asyncio.sleep(2)
-        raise TimeoutError("FarmBot images did not finish processing in time")
 
     def soil_capture(self, capture_id: str) -> dict[str, Any] | None:
         record = self.soil_captures.get(capture_id)
@@ -1970,6 +2181,7 @@ update_device({{mounted_tool_id=0}}); find_home()"""
         *,
         target: dict[str, float],
         timeout: float,
+        tolerance_mm: float = GRID_REPAIR_POSITION_TOLERANCE_MM,
     ) -> dict[str, float] | None:
         """Confirm FarmBot's live status reached a target before photography."""
         deadline = asyncio.get_running_loop().time() + timeout
@@ -2001,7 +2213,7 @@ update_device({{mounted_tool_id=0}}); find_home()"""
                 distance = math.sqrt(
                     sum((position[axis] - target[axis]) ** 2 for axis in ("x", "y", "z"))
                 )
-                if distance <= GRID_REPAIR_POSITION_TOLERANCE_MM:
+                if distance <= tolerance_mm:
                     return position
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:

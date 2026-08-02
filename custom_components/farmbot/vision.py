@@ -42,7 +42,7 @@ PLANT_FIELDS = (
     "spread_curve_id",
     "height_mm",
 )
-WEED_FIELDS = ("id", "name", "x", "y", "z", "radius")
+WEED_FIELDS = ("id", "pointer_type", "name", "x", "y", "z", "radius")
 CURVE_FIELDS = ("id", "name", "type", "data")
 
 

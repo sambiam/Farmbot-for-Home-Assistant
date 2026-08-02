@@ -236,13 +236,27 @@ def test_get_vision_inventory_filters_plants_images_and_curves():
             {"id": 7, "name": "Unrelated", "type": "spread", "data": {}},
         ],
     )
+
+    async def unfiltered_points(*, pointer_type=None):
+        # Simulate a proxy/API implementation that ignores pointer_type.
+        return list(manager.api.points.values())
+
+    manager.api.async_get_points = unfiltered_points
     _async_register_services(hass)
 
     result = _run(_call(hass, SERVICE_GET_VISION_INVENTORY, {"config_entry_id": "entry-1"}))
 
     assert [p["id"] for p in result["plants"]] == [1]
     assert result["weeds"] == [
-        {"id": 3, "name": None, "x": 10, "y": 20, "z": 0, "radius": 15}
+        {
+            "id": 3,
+            "pointer_type": "Weed",
+            "name": None,
+            "x": 10,
+            "y": 20,
+            "z": 0,
+            "radius": 15,
+        }
     ]
     assert [i["id"] for i in result["images"]] == [10]
     assert {c["id"] for c in result["curves"]} == {5, 6}

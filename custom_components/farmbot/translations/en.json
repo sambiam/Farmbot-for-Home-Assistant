@@ -138,7 +138,7 @@
     },
     "start_vision_soil_capture": {
       "name": "Start Vision soil capture",
-      "description": "Queue a bounded, acknowledged safe-Z motion job that captures a virtual-stereo soil triplet.",
+      "description": "Queue an illuminated virtual-stereo soil capture with per-frame position, upload, exposure, blur, and five-attempt retry validation.",
       "fields": {
         "config_entry_id": {
           "name": "FarmBot",
