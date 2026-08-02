@@ -15,6 +15,7 @@ This is the one place that:
 FarmBot credentials (email, password, JWT, MQTT credentials) never leave
 this module; callers only ever see the typed dict/list results below.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -91,8 +92,12 @@ def _is_safe_https_host(hostname: str) -> bool:
     except ValueError:
         return True  # an ordinary DNS hostname, not a literal IP
     return not (
-        ip.is_private or ip.is_loopback or ip.is_link_local
-        or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
     )
 
 
@@ -162,9 +167,7 @@ class FarmbotApiClient:
         return {"Authorization": f"Bearer {self.token}", "Accept": "application/json"}
 
     def _handle_auth_failure(self, path: str) -> None:
-        self._rate_limited_log.warning(
-            "auth", "FarmBot API rejected credentials calling %s", path
-        )
+        self._rate_limited_log.warning("auth", "FarmBot API rejected credentials calling %s", path)
         if self._reauth_callback is not None:
             self._reauth_callback()
 
@@ -283,6 +286,11 @@ class FarmbotApiClient:
         data = await self._request_json("GET", "/firmware_config")
         return data if isinstance(data, dict) else {}
 
+    async def async_get_tools(self) -> list[dict]:
+        """Return the FarmBot tool catalogue used to resolve tool slots."""
+        data = await self._request_json("GET", "/tools")
+        return data if isinstance(data, list) else []
+
     async def async_get_active_plants(self) -> list[dict]:
         """Return Plant points that are planted/sprouted/active (not archived)."""
         points = await self.async_get_points(pointer_type=POINTER_TYPE_PLANT)
@@ -324,9 +332,7 @@ class FarmbotApiClient:
         )
         return data if isinstance(data, dict) else {}
 
-    async def async_patch_soil_point(
-        self, point_id: int, *, x: float, y: float, z: float
-    ) -> dict:
+    async def async_patch_soil_point(self, point_id: int, *, x: float, y: float, z: float) -> dict:
         """Relocate an existing soil point and update its measured height."""
         data = await self._request_json(
             "PATCH",
@@ -527,7 +533,7 @@ class FarmbotApiClient:
                 continue
             key = item.get("key") or ""
             if key.startswith(_CAMERA_CALIBRATION_PREFIX):
-                raw[key[len(_CAMERA_CALIBRATION_PREFIX):]] = item.get("value")
+                raw[key[len(_CAMERA_CALIBRATION_PREFIX) :]] = item.get("value")
 
         values: dict[str, float] = {}
         for name in _CAMERA_CALIBRATION_REQUIRED_KEYS + _CAMERA_CALIBRATION_OPTIONAL_KEYS:

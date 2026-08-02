@@ -113,7 +113,7 @@ start_vision_soil_capture:
         config_entry:
           integration: farmbot
     point_id:
-      required: true
+      required: false
       selector:
         number:
           min: 1
@@ -673,6 +673,54 @@ get_vision_gcode:
       selector:
         config_entry:
           integration: farmbot
+    run_id:
+      required: true
+      selector:
+        text:
+
+start_vision_weeding:
+  name: Start adaptive rotary weeding
+  description: Run validated straight cuts with current-triggered recovery.
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        text:
+    weeds:
+      required: true
+      selector:
+        object:
+    manage_tool:
+      required: false
+      default: false
+      selector:
+        boolean:
+    avoid_tall_plants:
+      required: false
+      default: true
+      selector:
+        boolean:
+    tall_plant_height_mm:
+      required: false
+      default: 300
+      selector:
+        number:
+          min: 0
+          max: 5000
+          unit_of_measurement: mm
+    acknowledge_rotary_tool:
+      required: true
+      selector:
+        boolean:
+
+get_vision_weeding:
+  name: Get adaptive weeding status
+  description: Return progress and per-weed outcomes for an adaptive run.
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        text:
     run_id:
       required: true
       selector:

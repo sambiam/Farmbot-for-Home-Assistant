@@ -49,14 +49,15 @@ from .const import (
     TOPIC_FROM_DEVICE,
     TOPIC_LOGS,
     TOPIC_STATUS,
+    WEEDING_MAX_ATTEMPTS,
+    WEEDING_MAX_PATH_MM,
+    WEEDING_RPC_TIMEOUT_SECONDS,
 )
 from .jwt_util import decode_jwt_payload
 
 _LOGGER = logging.getLogger(__name__)
 
-_PIN_BINDING_TRIGGER_RE = re.compile(
-    r"^(?P<label>.+?) triggered, executing (?P<action>.+)$"
-)
+_PIN_BINDING_TRIGGER_RE = re.compile(r"^(?P<label>.+?) triggered, executing (?P<action>.+)$")
 _PIN_BINDING_FAILURE_RE = re.compile(
     r"^(?:Failed to find associated Sequence for:|Unknown PinBinding:)\s*(?P<label>.+)$"
 )
@@ -154,6 +155,8 @@ class FarmbotManager:
         self._grid_repair_tasks: set[asyncio.Task] = set()
         self.gcode_runs: dict[str, dict[str, Any]] = {}
         self._gcode_tasks: set[asyncio.Task] = set()
+        self.weeding_runs: dict[str, dict[str, Any]] = {}
+        self._weeding_tasks: set[asyncio.Task] = set()
 
     # -------------------- Token Refresh --------------------
     def _should_refresh_token(self) -> bool:
@@ -1278,12 +1281,9 @@ class FarmbotManager:
                             else "FarmBot lost its MQTT connection"
                         )
                         abort_reason = (
-                            f"Photo-grid repair stopped before cell {index}/{total}: "
-                            f"{stop_reason}"
+                            f"Photo-grid repair stopped before cell {index}/{total}: {stop_reason}"
                         )
-                        _LOGGER.warning(
-                            "Photo-grid repair %s aborted: %s", repair_id, stop_reason
-                        )
+                        _LOGGER.warning("Photo-grid repair %s aborted: %s", repair_id, stop_reason)
                         break
 
                     try:
@@ -1311,8 +1311,7 @@ class FarmbotManager:
                             {"index": target.get("index"), "reason": reason, "code": "error"}
                         )
                         _LOGGER.warning(
-                            "Photo-grid repair %s target %d/%d at X %.1f Y %.1f Z %.1f "
-                            "failed: %s",
+                            "Photo-grid repair %s target %d/%d at X %.1f Y %.1f Z %.1f failed: %s",
                             repair_id,
                             index,
                             total,
@@ -1334,9 +1333,7 @@ class FarmbotManager:
                             f"Photo-grid repair aborted after {consecutive_failures} "
                             f"consecutive failed cells (of {total} requested)"
                         )
-                        _LOGGER.warning(
-                            "Photo-grid repair %s aborted: %s", repair_id, abort_reason
-                        )
+                        _LOGGER.warning("Photo-grid repair %s aborted: %s", repair_id, abort_reason)
                         break
 
                 # An abort leaves the tail of the route untouched. Naming those
@@ -1367,8 +1364,7 @@ class FarmbotManager:
                 elif total > 0 and succeeded == total:
                     final_status = "complete"
                     final_message = (
-                        f"Verified {succeeded} photo-grid image(s) at "
-                        "the requested coordinates"
+                        f"Verified {succeeded} photo-grid image(s) at the requested coordinates"
                     )
                 else:
                     final_status = "failed"
@@ -1499,10 +1495,12 @@ class FarmbotManager:
             "chunks_sent": 0,
             "total_distance_mm": round(program.total_distance_mm, 1),
             "feed_mm_per_min": program.feed_mm_per_min,
-            "start_position": {axis: round(value, 2) for axis, value in
-                               program.start_position.items()},
-            "extent": {axis: [round(low, 1), round(high, 1)]
-                       for axis, (low, high) in extent.items()},
+            "start_position": {
+                axis: round(value, 2) for axis, value in program.start_position.items()
+            },
+            "extent": {
+                axis: [round(low, 1), round(high, 1)] for axis, (low, high) in extent.items()
+            },
             "warnings": list(program.warnings),
             "created_at": dt_util.utcnow().isoformat(),
         }
@@ -1599,6 +1597,365 @@ class FarmbotManager:
 
     def gcode_run(self, run_id: str) -> dict[str, Any] | None:
         return self.gcode_runs.get(run_id)
+
+    # -------------------- Adaptive rotary-tool weeding --------------------
+
+    @staticmethod
+    def _lua_number(value: float) -> str:
+        """Render a finite Lua number without exponent notation."""
+        if not math.isfinite(float(value)):
+            raise ValueError("weeding coordinates must be finite")
+        rendered = f"{float(value):.6f}".rstrip("0").rstrip(".")
+        return "0" if rendered in {"", "-0"} else rendered
+
+    @classmethod
+    def _weeding_lua(cls, weed: dict[str, Any], settings: dict[str, Any]) -> str:
+        """Build the trusted adaptive Lua routine for one straight cut.
+
+        Current is watched inside FarmBot OS, not polled through Home Assistant.
+        The callback switches the rotary output off as soon as the configured
+        load is exceeded. A cut overload reverses the next pass at half speed;
+        another overload raises the working height. Contact while lowering
+        raises the next attempt immediately.
+        """
+        number = cls._lua_number
+        start = weed["start"]
+        end = weed["end"]
+        soil_z = float(weed["soil_z"])
+        tool_height = float(settings["tool_height_mm"])
+        safe_z = float(weed["travel_z"])
+        motor_pin = int(settings["motor_pin"])
+        current_pin = int(settings["current_pin"])
+        max_load = float(settings["max_load"])
+        attempts = int(settings["max_attempts"])
+        cut_speed = int(settings["cut_speed_percent"])
+        approach_speed = int(settings["approach_speed_percent"])
+        height_step = float(settings["height_step_mm"])
+        waypoint_moves = "\n".join(
+            f"move({{x={number(point['x'])},y={number(point['y'])},z=safez,speed=approach}})"
+            for point in weed.get("approach_waypoints", [])
+        )
+        return f"""local motor={motor_pin}; local current={current_pin}
+local limit={number(max_load)}
+local overloaded=false; local phase='idle'; local zoff={number(tool_height)}
+local ax={number(start["x"])}; local ay={number(start["y"])}
+local bx={number(end["x"])}; local by={number(end["y"])}
+local safez={number(safe_z)}; local soilz={number(soil_z)}
+local cutspd={cut_speed}; local approach={approach_speed}
+watch_pin(current,function(data)
+  if tonumber(data.value) and tonumber(data.value) > limit and not overloaded then
+    overloaded=true; off(motor); toast('Rotary overload during '..phase,'warning')
+  end
+end)
+move({{z=safez,speed=approach}})
+{waypoint_moves}
+move({{x=ax,y=ay,z=safez,speed=approach}})
+local fromx=ax; local fromy=ay; local tox=bx; local toy=by
+for attempt=1,{attempts} do
+  overloaded=false; phase='lower'; on(motor)
+  move({{x=fromx,y=fromy,z=soilz+zoff,speed=25}})
+  if overloaded then
+    zoff=zoff+{number(height_step)}
+  else
+    phase='cut'
+    local speed=cutspd
+    if attempt > 1 then speed=math.max(10,math.floor(cutspd/2)) end
+    move({{x=tox,y=toy,z=soilz+zoff,speed=speed}})
+    if not overloaded then
+      off(motor); phase='done'; toast('Weed pass complete','success'); break
+    end
+    if attempt > 1 then zoff=zoff+{number(height_step)} end
+  end
+  off(motor); move({{z=safez,speed=approach}})
+  local tx=fromx; local ty=fromy; fromx=tox; fromy=toy; tox=tx; toy=ty
+  move({{x=fromx,y=fromy,z=safez,speed=approach}})
+end
+off(motor); phase='retract'; move({{z=safez,speed=approach}})
+move({{x=bx,y=by,z=safez,speed=approach}})"""
+
+    def plan_weeding(
+        self,
+        *,
+        weeds: list[dict[str, Any]],
+        settings: dict[str, Any],
+        firmware_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Validate every cut and hardware limit before the first weed moves."""
+        state = self.soil_motion_state(firmware_config)
+        if not state["connected"]:
+            raise ValueError("FarmBot is not connected")
+        if state["locked"]:
+            raise ValueError("FarmBot is emergency-stopped")
+        attempts = int(settings["max_attempts"])
+        if not 1 <= attempts <= WEEDING_MAX_ATTEMPTS:
+            raise ValueError(f"max_attempts must be between 1 and {WEEDING_MAX_ATTEMPTS}")
+        for pin_name in ("motor_pin", "current_pin"):
+            if not 0 <= int(settings[pin_name]) <= 1000:
+                raise ValueError(f"{pin_name} is outside the supported pin range")
+        if int(settings["motor_pin"]) == int(settings["current_pin"]):
+            raise ValueError("motor and current pins must be different")
+        if not 1 <= int(settings["cut_speed_percent"]) <= 100:
+            raise ValueError("cut speed must be between 1 and 100 percent")
+        if not 1 <= int(settings["approach_speed_percent"]) <= 100:
+            raise ValueError("approach speed must be between 1 and 100 percent")
+        bounds = state["axis_bounds"]
+        if settings.get("manage_tool"):
+            for axis in ("x", "y", "z"):
+                value = float(settings[f"tool_slot_{axis}"])
+                axis_bounds = bounds.get(axis)
+                if (
+                    not math.isfinite(value)
+                    or axis_bounds is None
+                    or not axis_bounds[0] <= value <= axis_bounds[1]
+                ):
+                    raise ValueError(f"tool slot {axis.upper()} is outside FarmBot's axis bounds")
+            direction = int(settings["tool_pullout_direction"])
+            front_x = float(settings["tool_slot_x"]) + (
+                100 if direction == 1 else -100 if direction == 2 else 0
+            )
+            front_y = float(settings["tool_slot_y"]) + (
+                100 if direction == 3 else -100 if direction == 4 else 0
+            )
+            if not bounds["x"][0] <= front_x <= bounds["x"][1]:
+                raise ValueError("tool pullout path leaves FarmBot's X axis bounds")
+            if not bounds["y"][0] <= front_y <= bounds["y"][1]:
+                raise ValueError("tool pullout path leaves FarmBot's Y axis bounds")
+        for weed in weeds:
+            start, end = weed["start"], weed["end"]
+            if (
+                math.hypot(float(end["x"]) - float(start["x"]), float(end["y"]) - float(start["y"]))
+                > WEEDING_MAX_PATH_MM
+            ):
+                raise ValueError("a weeding path exceeds the integration safety limit")
+            cut_z = float(weed["soil_z"]) + float(settings["tool_height_mm"])
+            values = {
+                "start X": (float(start["x"]), bounds.get("x")),
+                "end X": (float(end["x"]), bounds.get("x")),
+                "start Y": (float(start["y"]), bounds.get("y")),
+                "end Y": (float(end["y"]), bounds.get("y")),
+                "cut Z": (cut_z, bounds.get("z")),
+                "travel Z": (float(weed["travel_z"]), bounds.get("z")),
+            }
+            for label, (value, axis_bounds) in values.items():
+                if (
+                    not math.isfinite(value)
+                    or axis_bounds is None
+                    or not axis_bounds[0] <= value <= axis_bounds[1]
+                ):
+                    raise ValueError(f"{label} is outside FarmBot's configured axis bounds")
+            for waypoint in weed.get("approach_waypoints", []):
+                for axis in ("x", "y"):
+                    value = float(waypoint[axis])
+                    axis_bounds = bounds.get(axis)
+                    if (
+                        not math.isfinite(value)
+                        or axis_bounds is None
+                        or not axis_bounds[0] <= value <= axis_bounds[1]
+                    ):
+                        raise ValueError(
+                            f"approach waypoint {axis.upper()} is outside "
+                            "FarmBot's configured axis bounds"
+                        )
+        return state
+
+    @classmethod
+    def _mount_tool_lua(cls, settings: dict[str, Any]) -> str:
+        """Use FarmBot OS's standard helper, with a synthetic slot fallback."""
+        if settings.get("tool_slot_from_bot"):
+            target = json.dumps(str(settings["tool_name"]))
+            setup = ""
+        else:
+            number = cls._lua_number
+            if settings.get("tool_id"):
+                tool_id = str(int(settings["tool_id"]))
+                setup = ""
+            else:
+                tool_name = json.dumps(str(settings["tool_name"]))
+                tool_id = "fbv_tool.id"
+                setup = (
+                    f"local fbv_tool=get_tool{{name={tool_name}}}; "
+                    "if not fbv_tool then error('Rotary tool was not found') end; "
+                )
+            target = (
+                "{pointer_type='ToolSlot',gantry_mounted=false,"
+                f"tool_id={tool_id},"
+                f"x={number(settings['tool_slot_x'])},"
+                f"y={number(settings['tool_slot_y'])},"
+                f"z={number(settings['tool_slot_z'])},"
+                f"pullout_direction={int(settings['tool_pullout_direction'])}}}"
+            )
+        return (
+            setup + "find_home(); "
+            f"mount_tool({target}); "
+            "if not verify_tool() then error('Rotary tool mounting was not verified') end"
+        )
+
+    @classmethod
+    def _dismount_tool_lua(cls, settings: dict[str, Any]) -> str:
+        """Use the standard helper when possible, or its documented slot motion."""
+        if settings.get("tool_slot_from_bot"):
+            return (
+                "dismount_tool(); "
+                "if verify_tool() then error('Rotary tool dismount was not verified') end; "
+                "find_home()"
+            )
+        number = cls._lua_number
+        x = float(settings["tool_slot_x"])
+        y = float(settings["tool_slot_y"])
+        z = float(settings["tool_slot_z"])
+        direction = int(settings["tool_pullout_direction"])
+        front = {
+            1: (x + 100, y),
+            2: (x - 100, y),
+            3: (x, y + 100),
+            4: (x, y - 100),
+        }[direction]
+        return f"""if not verify_tool() then error('No rotary tool is mounted') end
+move({{z=safe_z()}})
+move({{x={number(front[0])},y={number(front[1])}}})
+move({{z={number(z)}}})
+move_absolute({number(x)},{number(y)},{number(z)},50)
+move({{z={number(z + 50)}}})
+if read_pin(63)==0 then error('Rotary tool dismount was not verified') end
+update_device({{mounted_tool_id=0}}); find_home()"""
+
+    def start_weeding_run(
+        self,
+        *,
+        weeds: list[dict[str, Any]],
+        settings: dict[str, Any],
+        firmware_config: dict[str, Any],
+    ) -> str:
+        state = self.plan_weeding(weeds=weeds, settings=settings, firmware_config=firmware_config)
+        active_sets = (
+            self._soil_capture_tasks,
+            self._grid_repair_tasks,
+            self._gcode_tasks,
+            self._weeding_tasks,
+        )
+        for task_set in active_sets:
+            task_set.intersection_update(task for task in task_set if not task.done())
+        if state["busy"] or any(active_sets):
+            raise ValueError("FarmBot is busy")
+        run_id = str(uuid.uuid4())
+        self.weeding_runs[run_id] = {
+            "run_id": run_id,
+            "status": "queued",
+            "message": "Adaptive weeding queued",
+            "weeds_total": len(weeds),
+            "weeds_completed": 0,
+            "weeds_failed": 0,
+            "results": [],
+            "created_at": dt_util.utcnow().isoformat(),
+        }
+        task = asyncio.create_task(
+            self._run_weeding(run_id=run_id, weeds=weeds, settings=settings),
+            name=f"farmbot-weeding-{run_id}",
+        )
+        self._weeding_tasks.add(task)
+        task.add_done_callback(self._weeding_tasks.discard)
+        return run_id
+
+    async def _run_weeding(
+        self, *, run_id: str, weeds: list[dict[str, Any]], settings: dict[str, Any]
+    ) -> None:
+        record = self.weeding_runs[run_id]
+        async with self._soil_capture_lock:
+            record.update(status="running", message="Starting adaptive rotary weeding")
+            tool_mounted = False
+            final_status, final_message = "failed", "Adaptive weeding failed"
+            try:
+                if settings.get("manage_tool"):
+                    record["message"] = "Finding home and mounting the rotary tool"
+                    await self.async_rpc_request(
+                        [gcode_lib.lua_node(self._mount_tool_lua(settings))],
+                        timeout=WEEDING_RPC_TIMEOUT_SECONDS,
+                    )
+                    tool_mounted = True
+                for index, weed in enumerate(weeds, start=1):
+                    state = self._live_connection_state()
+                    if not state["connected"] or state["locked"]:
+                        raise RuntimeError(
+                            "FarmBot is emergency-stopped"
+                            if state["locked"]
+                            else "FarmBot lost its MQTT connection"
+                        )
+                    record["message"] = f"Mowing weed {index} of {len(weeds)}"
+                    try:
+                        await self.async_rpc_request(
+                            [gcode_lib.lua_node(self._weeding_lua(weed, settings))],
+                            timeout=WEEDING_RPC_TIMEOUT_SECONDS,
+                        )
+                        record["weeds_completed"] += 1
+                        record["results"].append(
+                            {"weed_id": int(weed["weed_id"]), "status": "attempted"}
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as err:  # continue with the next weed
+                        message = str(err)[:160] or "weeding command failed"
+                        record["weeds_failed"] += 1
+                        record["results"].append(
+                            {
+                                "weed_id": int(weed["weed_id"]),
+                                "status": "failed",
+                                "message": message,
+                            }
+                        )
+                        _LOGGER.warning(
+                            "Weeding run %s weed %s failed: %s", run_id, weed["weed_id"], err
+                        )
+                final_status = "complete"
+                final_message = (
+                    f"Attempted {record['weeds_completed']} of {len(weeds)} weed(s); "
+                    f"{record['weeds_failed']} failed"
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # pylint: disable=broad-except
+                final_message = str(err)[:240] or final_message
+            finally:
+                # Lua also switches the tool off. This separate supervised write
+                # covers Lua/RPC failure before its cleanup statement executes.
+                try:
+                    await self.async_rpc_request(
+                        [
+                            {
+                                "kind": "write_pin",
+                                "args": {
+                                    "pin_number": int(settings["motor_pin"]),
+                                    "pin_value": 0,
+                                    "pin_mode": 0,
+                                },
+                            }
+                        ],
+                        timeout=30,
+                    )
+                except Exception as err:  # pylint: disable=broad-except
+                    _LOGGER.error(
+                        "Could not confirm rotary tool off after weeding run %s: %s", run_id, err
+                    )
+                if tool_mounted:
+                    record["message"] = "Returning the rotary tool to its slot"
+                    try:
+                        await self.async_rpc_request(
+                            [gcode_lib.lua_node(self._dismount_tool_lua(settings))],
+                            timeout=WEEDING_RPC_TIMEOUT_SECONDS,
+                        )
+                    except Exception as err:  # pylint: disable=broad-except
+                        _LOGGER.error(
+                            "Could not dismount rotary tool after run %s: %s", run_id, err
+                        )
+                        final_status = "failed"
+                        final_message = f"Weeding finished, but tool dismount failed: {err}"[:240]
+                record.update(
+                    status=final_status,
+                    message=final_message,
+                    completed_at=dt_util.utcnow().isoformat(),
+                )
+
+    def weeding_run(self, run_id: str) -> dict[str, Any] | None:
+        return self.weeding_runs.get(run_id)
 
     def _reported_position(self) -> dict[str, float] | None:
         position = (self.status or {}).get("location_data", {}).get("position") or {}

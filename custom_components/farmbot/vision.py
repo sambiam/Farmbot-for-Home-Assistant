@@ -12,6 +12,7 @@ spread curve's data values are plant **diameters** in millimetres. These
 are never the same number for the same plant, and this module never
 conflates them -- see ``radius_mm_to_diameter_mm`` / ``diameter_mm_to_radius_mm``.
 """
+
 from __future__ import annotations
 
 import math
@@ -39,12 +40,14 @@ PLANT_FIELDS = (
     "plant_stage",
     "planted_at",
     "spread_curve_id",
+    "height_mm",
 )
 WEED_FIELDS = ("id", "name", "x", "y", "z", "radius")
 CURVE_FIELDS = ("id", "name", "type", "data")
 
 
 # -------------------- device identity --------------------
+
 
 def normalize_device_id(value: Any) -> str:
     """Reduce a FarmBot device identifier to its canonical numeric form.
@@ -59,7 +62,7 @@ def normalize_device_id(value: Any) -> str:
     """
     text = str(value).strip()
     if text.startswith("device_"):
-        text = text[len("device_"):]
+        text = text[len("device_") :]
     return text
 
 
@@ -75,6 +78,7 @@ def same_device(a: Any, b: Any) -> bool:
 
 
 # -------------------- plants --------------------
+
 
 def is_active_plant(point: dict[str, Any]) -> bool:
     """True if `point` is a non-archived Plant in an active growth stage."""
@@ -92,7 +96,24 @@ def filter_active_plants(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def project_plant(point: dict[str, Any]) -> dict[str, Any]:
     """Trim a FarmBot point down to the fields the Vision app needs."""
-    return {field: point.get(field) for field in PLANT_FIELDS}
+    projected = {field: point.get(field) for field in PLANT_FIELDS}
+    meta = point.get("meta") if isinstance(point.get("meta"), dict) else {}
+    # Height is not populated by every FarmBot client. Preserve common API and
+    # metadata spellings; the Vision app treats an unknown height as protected.
+    projected["height_mm"] = next(
+        (
+            value
+            for value in (
+                point.get("height_mm"),
+                point.get("height"),
+                meta.get("height_mm"),
+                meta.get("height"),
+            )
+            if isinstance(value, (int, float)) and value >= 0
+        ),
+        None,
+    )
+    return projected
 
 
 def project_weed(point: dict[str, Any]) -> dict[str, Any]:
@@ -101,6 +122,7 @@ def project_weed(point: dict[str, Any]) -> dict[str, Any]:
 
 
 # -------------------- images --------------------
+
 
 def is_image_ready(image: dict[str, Any]) -> bool:
     """True once FarmBot has finished processing the image attachment."""
@@ -222,6 +244,7 @@ def build_processed_calibration(
 
 # -------------------- curves --------------------
 
+
 def is_vision_owned_curve(curve: dict[str, Any]) -> bool:
     """True for a spread curve created/managed by this integration."""
     name = curve.get("name") or ""
@@ -240,9 +263,7 @@ def select_relevant_curves(
         return [project_curve(c) for c in curves]
     wanted_ids = {p.get("spread_curve_id") for p in plants if p.get("spread_curve_id") is not None}
     return [
-        project_curve(c)
-        for c in curves
-        if c.get("id") in wanted_ids or is_vision_owned_curve(c)
+        project_curve(c) for c in curves if c.get("id") in wanted_ids or is_vision_owned_curve(c)
     ]
 
 
@@ -326,8 +347,10 @@ def normalize_camera_calibration(raw: dict[str, Any] | None) -> dict[str, Any]:
         return {"available": False}
 
     rotation = raw.get("total_rotation_angle", 0.0)
-    if not isinstance(rotation, (int, float)) or isinstance(rotation, bool) or not math.isfinite(
-        rotation
+    if (
+        not isinstance(rotation, (int, float))
+        or isinstance(rotation, bool)
+        or not math.isfinite(rotation)
     ):
         return {"available": False}
 
@@ -424,6 +447,7 @@ def compute_processed_calibration(
 
 # -------------------- unit conversion --------------------
 
+
 def radius_mm_to_diameter_mm(radius_mm: float) -> float:
     """Convert a FarmBot point radius (mm) to a spread-curve diameter (mm)."""
     return radius_mm * 2.0
@@ -435,6 +459,7 @@ def diameter_mm_to_radius_mm(diameter_mm: float) -> float:
 
 
 # -------------------- radius validation --------------------
+
 
 @dataclass
 class ValidationResult:
@@ -548,6 +573,7 @@ def validate_removal(
 
 
 # -------------------- spread-curve validation --------------------
+
 
 def validate_curve_name(name: Any) -> ValidationResult:
     if not isinstance(name, str) or not name.startswith(CURVE_NAME_PREFIX):

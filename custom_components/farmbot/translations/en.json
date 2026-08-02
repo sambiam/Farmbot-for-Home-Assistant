@@ -146,11 +146,11 @@
         },
         "point_id": {
           "name": "Soil point ID",
-          "description": "ID of a recognized FarmBot soil-height GenericPointer."
+          "description": "Optional recognized soil point. Omit it for a custom-coordinate calibration capture."
         },
         "capture_x": {
           "name": "Clear-soil X",
-          "description": "Optional clear-soil capture X, less than 200 mm from a soil point older than 14 days."
+          "description": "Clear-soil capture X. Required when no soil point is supplied; otherwise relocation is limited to 200 mm."
         },
         "capture_y": {
           "name": "Clear-soil Y",

@@ -30,7 +30,7 @@ VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
-INTEGRATION_VERSION = "2.6.0"
+INTEGRATION_VERSION = "2.7.0"
 VISION_CAPABILITIES = [
     "photo_grid_repair",
     "verified_photo_grid_repair",
@@ -51,6 +51,10 @@ VISION_CAPABILITIES = [
     # planning entirely, so this integration validates the whole program
     # itself before any of it is sent. See gcode.py.
     "experimental_raw_gcode",
+    # Purpose-built adaptive rotary-tool mowing. Unlike raw G-code this accepts
+    # only pre-validated straight cuts and keeps current recovery inside one
+    # FarmBot OS Lua command so an overload can turn the tool off immediately.
+    "adaptive_rotary_weeding",
 ]
 
 # Service names (existing)
@@ -79,6 +83,8 @@ SERVICE_REPORT_VISION_STATUS = "report_vision_status"
 SERVICE_REQUEST_VISION_ANALYSIS = "request_vision_analysis"
 SERVICE_START_VISION_GCODE = "start_vision_gcode"
 SERVICE_GET_VISION_GCODE = "get_vision_gcode"
+SERVICE_START_VISION_WEEDING = "start_vision_weeding"
+SERVICE_GET_VISION_WEEDING = "get_vision_weeding"
 
 # Home Assistant event fired for farmbot.request_vision_analysis
 EVENT_VISION_REQUEST = "farmbot_vision_request"
@@ -211,6 +217,13 @@ GCODE_MAX_FEED_MM_PER_MIN = 3000.0
 # `movement_max_spd_*` is missing, where "unknown" must mean slow.
 GCODE_MIN_STEPS_PER_SECOND = 10.0
 GCODE_FALLBACK_MAX_STEPS_PER_SECOND = 800.0
+
+# Adaptive rotary-tool weeding. These are hard integration-side ceilings; the
+# Vision app may choose more conservative values.
+WEEDING_MAX_WEEDS_PER_RUN = 100
+WEEDING_RPC_TIMEOUT_SECONDS = 300
+WEEDING_MAX_PATH_MM = 500.0
+WEEDING_MAX_ATTEMPTS = 5
 
 # Decompression-bomb guards applied to the *decoded* source image, before any
 # resize. A native FarmBot frame is 2592x1944 (~5 MP); these limits leave

@@ -19,7 +19,6 @@ from homeassistant.util import dt as dt_util
 
 from . import image_utils, vision
 from .api import FarmbotApiError, FarmbotAuthError
-from .gcode import GcodeError
 from .config_flow import FarmbotConfigFlow
 from .const import (
     DEFAULT_IMAGE_LOOKBACK_HOURS,
@@ -52,6 +51,7 @@ from .const import (
     SERVICE_GET_VISION_INVENTORY,
     SERVICE_GET_VISION_SOIL_CAPTURE,
     SERVICE_GET_VISION_SOIL_POINTS,
+    SERVICE_GET_VISION_WEEDING,
     SERVICE_LIST_VISION_BOTS,
     SERVICE_MOVE_TO,
     SERVICE_REMOVE_VISION_WEED,
@@ -60,6 +60,7 @@ from .const import (
     SERVICE_START_VISION_GCODE,
     SERVICE_START_VISION_GRID_REPAIR,
     SERVICE_START_VISION_SOIL_CAPTURE,
+    SERVICE_START_VISION_WEEDING,
     SERVICE_UPDATE_VISION_WEED_RADIUS,
     SERVICE_UPSERT_VISION_SPREAD_CURVE,
     SOIL_POINT_STALE_DAYS,
@@ -69,7 +70,10 @@ from .const import (
     VISION_CURVE_TYPE,
     VISION_IMAGE_POLL_INTERVAL_SECONDS,
     VISION_STATUS_VALUES,
+    WEEDING_MAX_ATTEMPTS,
+    WEEDING_MAX_WEEDS_PER_RUN,
 )
+from .gcode import GcodeError
 from .manager import FarmbotManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -164,7 +168,7 @@ SERVICE_GET_VISION_SOIL_POINTS_SCHEMA = vol.Schema({vol.Required("config_entry_i
 SERVICE_START_VISION_SOIL_CAPTURE_SCHEMA = vol.Schema(
     {
         vol.Required("config_entry_id"): cv.string,
-        vol.Required("point_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Optional("point_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
         vol.Optional("capture_x"): vol.Coerce(float),
         vol.Optional("capture_y"): vol.Coerce(float),
         vol.Optional("capture_z", default=0): vol.Coerce(float),
@@ -250,6 +254,72 @@ SERVICE_GET_VISION_GCODE_SCHEMA = vol.Schema(
         vol.Required("config_entry_id"): cv.string,
         vol.Required("run_id"): _cv_uuid,
     }
+)
+
+_WEEDING_POINT_SCHEMA = vol.Schema(
+    {vol.Required("x"): vol.Coerce(float), vol.Required("y"): vol.Coerce(float)}
+)
+_WEEDING_TARGET_SCHEMA = vol.Schema(
+    {
+        vol.Required("weed_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Required("start"): _WEEDING_POINT_SCHEMA,
+        vol.Required("end"): _WEEDING_POINT_SCHEMA,
+        vol.Required("soil_z"): vol.Coerce(float),
+        vol.Required("travel_z"): vol.Coerce(float),
+        vol.Optional("approach_waypoints", default=[]): vol.All(
+            [_WEEDING_POINT_SCHEMA], vol.Length(max=200)
+        ),
+    }
+)
+SERVICE_START_VISION_WEEDING_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("weeds"): vol.All(
+            [_WEEDING_TARGET_SCHEMA], vol.Length(min=1, max=WEEDING_MAX_WEEDS_PER_RUN)
+        ),
+        vol.Optional("motor_pin", default=2): vol.All(vol.Coerce(int), vol.Range(min=0, max=1000)),
+        vol.Optional("current_pin", default=60): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=1000)
+        ),
+        vol.Optional("max_load", default=115): vol.All(
+            vol.Coerce(float), vol.Range(min=1, max=1023)
+        ),
+        vol.Optional("tool_height_mm", default=80): vol.All(
+            vol.Coerce(float), vol.Range(min=-200, max=300)
+        ),
+        vol.Optional("max_attempts", default=3): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=WEEDING_MAX_ATTEMPTS)
+        ),
+        vol.Optional("cut_speed_percent", default=50): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=100)
+        ),
+        vol.Optional("approach_speed_percent", default=100): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=100)
+        ),
+        vol.Optional("height_step_mm", default=10): vol.All(
+            vol.Coerce(float), vol.Range(min=1, max=50)
+        ),
+        vol.Optional("manage_tool", default=False): cv.boolean,
+        vol.Optional("tool_name", default="Rotary Tool"): vol.All(
+            cv.string, vol.Length(min=1, max=100)
+        ),
+        vol.Optional("tool_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Optional("tool_slot_x", default=4.2): vol.Coerce(float),
+        vol.Optional("tool_slot_y", default=576.8): vol.Coerce(float),
+        vol.Optional("tool_slot_z", default=-386): vol.Coerce(float),
+        vol.Optional("tool_pullout_direction", default=1): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=4)
+        ),
+        vol.Optional("tool_slot_from_bot", default=False): cv.boolean,
+        vol.Optional("avoid_tall_plants", default=True): cv.boolean,
+        vol.Optional("tall_plant_height_mm", default=300): vol.All(
+            vol.Coerce(float), vol.Range(min=0, max=5000)
+        ),
+        vol.Required("acknowledge_rotary_tool"): vol.All(cv.boolean, vol.In([True])),
+    }
+)
+SERVICE_GET_VISION_WEEDING_SCHEMA = vol.Schema(
+    {vol.Required("config_entry_id"): cv.string, vol.Required("run_id"): _cv_uuid}
 )
 
 SERVICE_APPLY_VISION_SOIL_HEIGHT_SCHEMA = vol.Schema(
@@ -676,8 +746,47 @@ def _async_register_services(hass: HomeAssistant) -> None:
             manager.api.async_get_firmware_config(),
             context="fetch motion configuration",
         )
+        try:
+            get_tools = getattr(manager.api, "async_get_tools", None)
+            tools = await get_tools() if get_tools is not None else []
+        except FarmbotApiError as err:
+            _LOGGER.warning("Could not fetch FarmBot tool names: %s", err)
+            tools = []
+        tools_by_id = {
+            int(tool["id"]): str(tool.get("name") or f"Tool {tool['id']}")
+            for tool in tools
+            if isinstance(tool, dict) and tool.get("id") is not None
+        }
         eligible = []
+        tool_slots = []
         for point in points:
+            if (
+                point.get("pointer_type") == "ToolSlot"
+                and not point.get("discarded_at")
+                and (
+                    point.get("device_id") is None
+                    or vision.same_device(point.get("device_id"), manager.device_id)
+                )
+            ):
+                try:
+                    tool_id = int(point["tool_id"])
+                    coordinates = [float(point[axis]) for axis in ("x", "y", "z")]
+                    direction = int(point.get("pullout_direction") or 0)
+                    if all(math.isfinite(value) for value in coordinates):
+                        tool_slots.append(
+                            {
+                                "id": int(point["id"]),
+                                "tool_id": tool_id,
+                                "tool_name": tools_by_id.get(tool_id, f"Tool {tool_id}"),
+                                "x": coordinates[0],
+                                "y": coordinates[1],
+                                "z": coordinates[2],
+                                "pullout_direction": direction,
+                                "gantry_mounted": bool(point.get("gantry_mounted", False)),
+                            }
+                        )
+                except (KeyError, TypeError, ValueError):
+                    pass
             if not manager.is_soil_height_point(point):
                 continue
             if point.get("device_id") is not None and not vision.same_device(
@@ -704,6 +813,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
             "device_id": manager.device_id,
             "generated_at": dt_util.utcnow().isoformat(),
             "points": sorted(eligible, key=lambda item: (item["x"], item["y"], item["id"])),
+            "tool_slots": sorted(tool_slots, key=lambda item: item["tool_name"].casefold()),
             "motion": manager.soil_motion_state(firmware),
         }
 
@@ -722,17 +832,20 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
     async def start_vision_soil_capture(call: ServiceCall) -> dict:
         manager = _get_manager(hass, call.data["config_entry_id"])
-        point = await _safe_api_call(
-            manager,
-            manager.api.async_get_point(call.data["point_id"]),
-            context="fetch soil point for capture",
-        )
-        if not manager.is_soil_height_point(point):
-            return {"status": "rejected", "message": "Eligible soil-height point not found"}
-        if point.get("device_id") is not None and not vision.same_device(
-            point.get("device_id"), manager.device_id
-        ):
-            return {"status": "rejected", "message": "Soil point belongs to another FarmBot"}
+        point_id = call.data.get("point_id")
+        point = None
+        if point_id is not None:
+            point = await _safe_api_call(
+                manager,
+                manager.api.async_get_point(point_id),
+                context="fetch soil point for capture",
+            )
+            if not manager.is_soil_height_point(point):
+                return {"status": "rejected", "message": "Eligible soil-height point not found"}
+            if point.get("device_id") is not None and not vision.same_device(
+                point.get("device_id"), manager.device_id
+            ):
+                return {"status": "rejected", "message": "Soil point belongs to another FarmBot"}
         firmware = await _safe_api_call(
             manager,
             manager.api.async_get_firmware_config(),
@@ -745,15 +858,28 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 "status": "rejected",
                 "message": "Capture X and Y must be supplied together",
             }
+        if point is None and not has_x:
+            return {
+                "status": "rejected",
+                "message": "Capture X and Y are required when no soil point is supplied",
+            }
+        if point is None:
+            point = {
+                "id": 0,
+                "name": "Custom soil calibration coordinate",
+                "x": float(call.data["capture_x"]),
+                "y": float(call.data["capture_y"]),
+                "z": float(call.data["capture_z"]),
+            }
         capture_x = float(call.data["capture_x"]) if has_x else float(point["x"])
         capture_y = float(call.data["capture_y"]) if has_y else float(point["y"])
         relocation = math.hypot(capture_x - float(point["x"]), capture_y - float(point["y"]))
-        if relocation >= MAX_SOIL_RELOCATION_MM:
+        if point_id is not None and relocation >= MAX_SOIL_RELOCATION_MM:
             return {
                 "status": "rejected",
                 "message": "Clear-soil capture must be less than 200 mm from the point",
             }
-        if relocation > 0.5 and not _soil_point_is_stale(point):
+        if point_id is not None and relocation > 0.5 and not _soil_point_is_stale(point):
             return {
                 "status": "rejected",
                 "message": "Only soil points older than 14 days may be relocated",
@@ -884,6 +1010,54 @@ def _async_register_services(hass: HomeAssistant) -> None:
         run = manager.gcode_run(call.data["run_id"])
         if run is None:
             return {"status": "failed", "message": "Raw G-code run was not found"}
+        return run
+
+    async def start_vision_weeding(call: ServiceCall) -> dict:
+        """Start a validated, current-aware straight-line cut for each weed."""
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        firmware = await _safe_api_call(
+            manager,
+            manager.api.async_get_firmware_config(),
+            context="fetch motion configuration for adaptive weeding",
+        )
+        settings_data = {
+            key: call.data[key]
+            for key in (
+                "motor_pin",
+                "current_pin",
+                "max_load",
+                "tool_height_mm",
+                "max_attempts",
+                "cut_speed_percent",
+                "approach_speed_percent",
+                "height_step_mm",
+                "manage_tool",
+                "tool_name",
+                "tool_slot_x",
+                "tool_slot_y",
+                "tool_slot_z",
+                "tool_pullout_direction",
+                "tool_slot_from_bot",
+                "avoid_tall_plants",
+                "tall_plant_height_mm",
+            )
+        }
+        settings_data["tool_id"] = call.data.get("tool_id")
+        try:
+            run_id = manager.start_weeding_run(
+                weeds=list(call.data["weeds"]),
+                settings=settings_data,
+                firmware_config=firmware,
+            )
+        except ValueError as err:
+            return {"status": "rejected", "message": str(err)[:240]}
+        return {"status": "queued", "run_id": run_id, "message": "Adaptive weeding queued"}
+
+    async def get_vision_weeding(call: ServiceCall) -> dict:
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        run = manager.weeding_run(call.data["run_id"])
+        if run is None:
+            return {"status": "failed", "message": "Adaptive weeding run was not found"}
         return run
 
     async def delete_vision_image(call: ServiceCall) -> dict:
@@ -1550,6 +1724,20 @@ def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        SERVICE_START_VISION_WEEDING,
+        _vision_response_service(start_vision_weeding),
+        schema=SERVICE_START_VISION_WEEDING_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_VISION_WEEDING,
+        _vision_response_service(get_vision_weeding),
+        schema=SERVICE_GET_VISION_WEEDING_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_APPLY_VISION_SOIL_HEIGHT,
         _vision_response_service(apply_vision_soil_height),
         schema=SERVICE_APPLY_VISION_SOIL_HEIGHT_SCHEMA,
@@ -1644,6 +1832,10 @@ def _async_remove_services_if_last_entry(hass: HomeAssistant) -> None:
         SERVICE_UPSERT_VISION_SPREAD_CURVE,
         SERVICE_REPORT_VISION_STATUS,
         SERVICE_REQUEST_VISION_ANALYSIS,
+        SERVICE_START_VISION_GCODE,
+        SERVICE_GET_VISION_GCODE,
+        SERVICE_START_VISION_WEEDING,
+        SERVICE_GET_VISION_WEEDING,
     ):
         hass.services.async_remove(DOMAIN, service)
 

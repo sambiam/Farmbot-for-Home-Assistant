@@ -3,6 +3,25 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.7.0 - 2026-08-02
+
+- **Added:** Purpose-built `start_vision_weeding` and `get_vision_weeding`
+  services, advertised through the `adaptive_rotary_weeding` capability.
+- **Safety:** The integration bounds-checks every straight cut before movement,
+  requires an explicit rotary-tool acknowledgement, retracts Z before lateral
+  travel, monitors the current pin inside FarmBot OS Lua, switches the motor
+  off on overload, and performs a separate final motor-off command even when a
+  weed command fails.
+- **Changed:** Overloaded cuts recover per weed by reversing at half speed and
+  then raising the working height; a failed weed is recorded and the batch
+  continues with the next weed.
+- **Added:** Optional mount-before/dismount-after handling through FarmBot OS's
+  standard tool helpers, including ToolSlot inventory and a validated manual
+  slot-coordinate fallback when the rotary slot cannot be resolved.
+- **Safety:** Adaptive runs accept preplanned plant-avoidance waypoints, validate
+  every waypoint against axis bounds, and return each cut to a deterministic
+  endpoint so the next mounted-tool transit starts from a known position.
+
 ## 2.6.0 - 2026-07-31
 
 - **Added (experimental):** `farmbot.start_vision_gcode` and
