@@ -45,6 +45,7 @@ from .const import (
     SERVICE_CREATE_VISION_WEED,
     SERVICE_DELETE_VISION_IMAGE,
     SERVICE_EXECUTE_SEQUENCE,
+    SERVICE_FINISH_VISION_SOIL_CAPTURE_BATCH,
     SERVICE_GET_VISION_GCODE,
     SERVICE_GET_VISION_GRID_REPAIR,
     SERVICE_GET_VISION_IMAGE,
@@ -180,6 +181,7 @@ SERVICE_START_VISION_SOIL_CAPTURE_SCHEMA = vol.Schema(
             [vol.All(vol.Coerce(float), vol.Range(min=0, max=MAX_SOIL_Z_OFFSET_MM))],
             vol.Length(min=1, max=3),
         ),
+        vol.Optional("batch_id"): _cv_uuid,
     }
 )
 
@@ -187,6 +189,13 @@ SERVICE_GET_VISION_SOIL_CAPTURE_SCHEMA = vol.Schema(
     {
         vol.Required("config_entry_id"): cv.string,
         vol.Required("capture_id"): _cv_uuid,
+    }
+)
+
+SERVICE_FINISH_VISION_SOIL_CAPTURE_BATCH_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("batch_id"): _cv_uuid,
     }
 )
 
@@ -915,6 +924,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 capture_z=float(call.data["capture_z"]),
                 baseline_mm=float(call.data["baseline_mm"]),
                 z_offsets_mm=z_offsets,
+                batch_id=call.data.get("batch_id"),
             )
         except ValueError as err:
             return {"status": "rejected", "message": str(err)[:240]}
@@ -930,6 +940,13 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if capture is None:
             return {"status": "failed", "message": "Soil capture was not found", "frames": []}
         return capture
+
+    async def finish_vision_soil_capture_batch(call: ServiceCall) -> dict:
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        try:
+            return await manager.finish_soil_capture_batch(call.data["batch_id"])
+        except ValueError as err:
+            return {"status": "rejected", "message": str(err)[:240]}
 
     async def start_vision_grid_repair(call: ServiceCall) -> dict:
         """Queue bounded move-and-photo commands for missing grid cells."""
@@ -1692,6 +1709,13 @@ def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        SERVICE_FINISH_VISION_SOIL_CAPTURE_BATCH,
+        _vision_response_service(finish_vision_soil_capture_batch),
+        schema=SERVICE_FINISH_VISION_SOIL_CAPTURE_BATCH_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_START_VISION_GRID_REPAIR,
         _vision_response_service(start_vision_grid_repair),
         schema=SERVICE_START_VISION_GRID_REPAIR_SCHEMA,
@@ -1822,6 +1846,7 @@ def _async_remove_services_if_last_entry(hass: HomeAssistant) -> None:
         SERVICE_GET_VISION_SOIL_POINTS,
         SERVICE_START_VISION_SOIL_CAPTURE,
         SERVICE_GET_VISION_SOIL_CAPTURE,
+        SERVICE_FINISH_VISION_SOIL_CAPTURE_BATCH,
         SERVICE_START_VISION_GRID_REPAIR,
         SERVICE_GET_VISION_GRID_REPAIR,
         SERVICE_DELETE_VISION_IMAGE,

@@ -3,6 +3,15 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.9.0 - 2026-08-03
+
+- **Fixed:** Soil captures from the same measurement batch may queue behind a
+  capture whose worker is still finishing, instead of misreporting the
+  integration's own lock and FarmBot busy flag as an external busy failure.
+- **Changed:** Added optional soil-capture batch IDs and an explicit batch
+  finish service. Batched captures defer position restoration so multi-point
+  runs travel directly between sites, then restore the original X/Y/Z once.
+
 ## 2.8.1 - 2026-08-03
 
 - Reworked soil calibration and measurement capture into a verified per-frame

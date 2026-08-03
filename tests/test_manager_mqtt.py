@@ -243,6 +243,55 @@ def test_only_one_soil_capture_can_be_queued_per_bot():
         raise AssertionError("a second soil capture was queued")
 
 
+@pytest.mark.asyncio
+async def test_same_batch_capture_queues_behind_the_finishing_capture(monkeypatch):
+    _, manager = _make_manager()
+    manager._mqtt = object()
+    manager._mqtt_connected = True
+    manager.status = {
+        "informational_settings": {"busy": True, "locked": False},
+        "location_data": {"position": {"x": 10, "y": 20, "z": 0}},
+    }
+    firmware = {
+        "movement_axis_nr_steps_x": 1000,
+        "movement_axis_nr_steps_y": 1000,
+        "movement_axis_nr_steps_z": 1000,
+        "movement_step_per_mm_x": 10,
+        "movement_step_per_mm_y": 10,
+        "movement_step_per_mm_z": 10,
+    }
+    release = asyncio.Event()
+    existing = asyncio.create_task(release.wait())
+    manager._soil_capture_tasks.add(existing)
+    manager._soil_capture_task_batches[existing] = "batch-1"
+    manager._soil_capture_batches["batch-1"] = {
+        "batch_id": "batch-1",
+        "original_position": {"x": 10, "y": 20, "z": 0},
+    }
+    received = {}
+
+    async def fake_capture(**kwargs):
+        received.update(kwargs)
+        await release.wait()
+
+    monkeypatch.setattr(manager, "_run_soil_capture", fake_capture)
+    try:
+        capture_id = manager.start_soil_capture(
+            point={"x": 50, "y": 50},
+            firmware_config=firmware,
+            capture_z=0,
+            baseline_mm=15,
+            z_offsets_mm=[0],
+            batch_id="batch-1",
+        )
+        await asyncio.sleep(0)
+        assert capture_id in manager.soil_captures
+        assert received["original_position"] is None
+    finally:
+        release.set()
+        await asyncio.gather(*manager._soil_capture_tasks)
+
+
 def test_active_soil_frames_are_claimed_before_new_photo_events():
     _, manager = _make_manager()
     manager.soil_captures["capture"] = {

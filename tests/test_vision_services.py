@@ -29,6 +29,7 @@ from custom_components.farmbot import (
     SERVICE_CREATE_VISION_WEED,
     SERVICE_DELETE_VISION_IMAGE,
     SERVICE_EXECUTE_SEQUENCE,
+    SERVICE_FINISH_VISION_SOIL_CAPTURE_BATCH,
     SERVICE_GET_VISION_GRID_REPAIR,
     SERVICE_GET_VISION_IMAGE,
     SERVICE_GET_VISION_INVENTORY,
@@ -633,7 +634,9 @@ def test_start_and_get_soil_capture_are_typed_and_asynchronous():
     manager, _ = _make_bot(hass)
     manager.api.points[70] = _soil_point()
     capture_id = str(uuid.uuid4())
+    batch_id = str(uuid.uuid4())
     calls = []
+    finished = []
 
     def fake_start(**kwargs):
         calls.append(kwargs)
@@ -646,6 +649,12 @@ def test_start_and_get_soil_capture_are_typed_and_asynchronous():
         return capture_id
 
     manager.start_soil_capture = fake_start
+
+    async def fake_finish(value):
+        finished.append(value)
+        return {"status": "complete", "message": "restored"}
+
+    manager.finish_soil_capture_batch = fake_finish
     _async_register_services(hass)
     started = _run(
         _call(
@@ -659,6 +668,7 @@ def test_start_and_get_soil_capture_are_typed_and_asynchronous():
                 "capture_z": 0,
                 "baseline_mm": 15,
                 "z_offsets_mm": [0, 25, 50],
+                "batch_id": batch_id,
             },
         )
     )
@@ -666,6 +676,7 @@ def test_start_and_get_soil_capture_are_typed_and_asynchronous():
     assert calls[0]["z_offsets_mm"] == [0.0, 25.0, 50.0]
     assert calls[0]["point"]["x"] == 125.0
     assert calls[0]["point"]["y"] == 225.0
+    assert calls[0]["batch_id"] == batch_id
     polled = _run(
         _call(
             hass,
@@ -674,6 +685,15 @@ def test_start_and_get_soil_capture_are_typed_and_asynchronous():
         )
     )
     assert polled["status"] == "queued"
+    finish = _run(
+        _call(
+            hass,
+            SERVICE_FINISH_VISION_SOIL_CAPTURE_BATCH,
+            {"config_entry_id": "entry-1", "batch_id": batch_id},
+        )
+    )
+    assert finish == {"status": "complete", "message": "restored"}
+    assert finished == [batch_id]
 
 
 def test_start_grid_repair_accepts_app_payload_and_is_pollable():

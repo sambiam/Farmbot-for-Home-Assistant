@@ -192,6 +192,41 @@ def test_soil_capture_aborts_after_five_bad_photos_without_advancing():
     _run(scenario())
 
 
+def test_finishing_soil_batch_restores_original_position_once():
+    async def scenario():
+        _, manager, _ = _make_manager()
+        manager._mqtt = object()
+        manager._mqtt_connected = True
+        manager.status = {
+            "location_data": {"position": {"x": 300, "y": 400, "z": 0}},
+            "informational_settings": {"busy": False, "locked": False},
+        }
+        manager._soil_capture_batches["batch-1"] = {
+            "batch_id": "batch-1",
+            "original_position": {"x": 10, "y": 20, "z": -5},
+        }
+        calls = []
+
+        async def fake_rpc(commands, **_kwargs):
+            calls.append(commands)
+            return {"kind": "rpc_ok"}
+
+        manager.async_rpc_request = fake_rpc
+        result = await manager.finish_soil_capture_batch("batch-1")
+
+        assert result["status"] == "complete"
+        assert "batch-1" not in manager._soil_capture_batches
+        move = calls[0][0]
+        overwrites = {
+            item["args"]["axis"]: item["args"]["axis_operand"]["args"]["number"]
+            for item in move["body"]
+            if item["kind"] == "axis_overwrite"
+        }
+        assert overwrites == {"x": 10.0, "y": 20.0, "z": -5.0}
+
+    _run(scenario())
+
+
 def test_grid_repair_moves_takes_photos_and_restores_position():
     async def scenario():
         _, manager, _ = _make_manager()

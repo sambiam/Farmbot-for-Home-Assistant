@@ -30,7 +30,7 @@ VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
-INTEGRATION_VERSION = "2.8.1"
+INTEGRATION_VERSION = "2.9.0"
 VISION_CAPABILITIES = [
     "photo_grid_repair",
     "verified_photo_grid_repair",
@@ -46,6 +46,9 @@ VISION_CAPABILITIES = [
     # target and failed target is echoed back with it, so the caller tracks
     # cells by stable identity instead of by coordinate proximity.
     "indexed_photo_grid_targets",
+    # Sequential soil captures may share an origin and defer restoration until
+    # the caller explicitly finishes the measurement batch.
+    "batched_soil_capture",
     # EXPERIMENTAL. Raw firmware G-code, forwarded to the Farmduino through
     # FarmBot OS's Lua `gcode()` escape hatch. Bypasses FarmBot OS's motion
     # planning entirely, so this integration validates the whole program
@@ -68,6 +71,7 @@ SERVICE_GET_VISION_IMAGE = "get_vision_image"
 SERVICE_GET_VISION_SOIL_POINTS = "get_vision_soil_points"
 SERVICE_START_VISION_SOIL_CAPTURE = "start_vision_soil_capture"
 SERVICE_GET_VISION_SOIL_CAPTURE = "get_vision_soil_capture"
+SERVICE_FINISH_VISION_SOIL_CAPTURE_BATCH = "finish_vision_soil_capture_batch"
 SERVICE_START_VISION_GRID_REPAIR = "start_vision_grid_repair"
 SERVICE_GET_VISION_GRID_REPAIR = "get_vision_grid_repair"
 SERVICE_DELETE_VISION_IMAGE = "delete_vision_image"

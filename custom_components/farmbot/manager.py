@@ -156,6 +156,8 @@ class FarmbotManager:
         self._soil_capture_lock = asyncio.Lock()
         self.soil_captures: dict[str, dict[str, Any]] = {}
         self._soil_capture_tasks: set[asyncio.Task] = set()
+        self._soil_capture_task_batches: dict[asyncio.Task, str | None] = {}
+        self._soil_capture_batches: dict[str, dict[str, Any]] = {}
         self._claimed_soil_image_ids: set[int] = set()
         self.grid_repairs: dict[str, dict[str, Any]] = {}
         self._grid_repair_tasks: set[asyncio.Task] = set()
@@ -757,6 +759,7 @@ class FarmbotManager:
         capture_z: float,
         baseline_mm: float,
         z_offsets_mm: list[float],
+        batch_id: str | None = None,
     ) -> str:
         """Create a bounded asynchronous capture session and return its ID."""
         state = self.soil_motion_state(firmware_config)
@@ -768,9 +771,20 @@ class FarmbotManager:
         # that just finished doesn't cause a spurious "FarmBot is busy".
         self._soil_capture_tasks = {t for t in self._soil_capture_tasks if not t.done()}
         self._grid_repair_tasks = {t for t in self._grid_repair_tasks if not t.done()}
+        active_soil_tasks = {task for task in self._soil_capture_tasks if not task.done()}
+        same_batch_active = bool(
+            batch_id
+            and active_soil_tasks
+            and all(
+                self._soil_capture_task_batches.get(task) == batch_id for task in active_soil_tasks
+            )
+        )
+        reported_busy = bool(
+            ((self.status or {}).get("informational_settings") or {}).get("busy", False)
+        )
         if (
-            state["busy"]
-            or any(not task.done() for task in self._soil_capture_tasks)
+            (reported_busy and not same_batch_active)
+            or (active_soil_tasks and not same_batch_active)
             or any(not task.done() for task in self._grid_repair_tasks)
         ):
             raise ValueError("FarmBot is busy")
@@ -786,6 +800,19 @@ class FarmbotManager:
             z = capture_z + z_direction * offset
             if not bounds["z"][0] <= z <= bounds["z"][1]:
                 raise ValueError("soil capture Z is outside FarmBot bounds")
+        original_position: dict[str, Any] | None = state["position"]
+        if batch_id is not None:
+            if not all(state["position"].get(axis) is not None for axis in ("x", "y", "z")):
+                raise ValueError("FarmBot position is unavailable")
+            self._soil_capture_batches.setdefault(
+                batch_id,
+                {
+                    "batch_id": batch_id,
+                    "original_position": dict(state["position"]),
+                    "created_at": dt_util.utcnow().isoformat(),
+                },
+            )
+            original_position = None
         capture_id = str(uuid.uuid4())
         self.soil_captures[capture_id] = {
             "capture_id": capture_id,
@@ -794,6 +821,7 @@ class FarmbotManager:
             "frames": [],
             "created_at": dt_util.utcnow().isoformat(),
             "expected_frames": [],
+            "batch_id": batch_id,
         }
         task = asyncio.create_task(
             self._run_soil_capture(
@@ -803,12 +831,18 @@ class FarmbotManager:
                 lateral_offsets=laterals,
                 z_offsets=z_offsets_mm,
                 z_direction=z_direction,
-                original_position=state["position"],
+                original_position=original_position,
             ),
             name=f"farmbot-soil-{capture_id}",
         )
         self._soil_capture_tasks.add(task)
-        task.add_done_callback(self._soil_capture_tasks.discard)
+        self._soil_capture_task_batches[task] = batch_id
+
+        def discard_finished(finished: asyncio.Task) -> None:
+            self._soil_capture_tasks.discard(finished)
+            self._soil_capture_task_batches.pop(finished, None)
+
+        task.add_done_callback(discard_finished)
         return capture_id
 
     async def _run_soil_capture(
@@ -820,7 +854,7 @@ class FarmbotManager:
         lateral_offsets: list[float],
         z_offsets: list[float],
         z_direction: int,
-        original_position: dict[str, Any],
+        original_position: dict[str, Any] | None,
     ) -> None:
         record = self.soil_captures[capture_id]
         light_state = (self.status or {}).get("pins", {}).get(str(SOIL_CAPTURE_LIGHTING_PIN), 0)
@@ -1013,11 +1047,23 @@ class FarmbotManager:
                     )
                 final_status = "complete"
                 final_message = f"Captured {len(record['frames'])} soil images"
-                record.update(message="Restoring the FarmBot starting position")
+                record.update(
+                    message=(
+                        "Capture complete; retaining position for the measurement batch"
+                        if original_position is None
+                        else "Restoring the FarmBot starting position"
+                    )
+                )
             except Exception as err:  # pylint: disable=broad-except
                 _LOGGER.warning("Soil capture %s failed: %s", capture_id, err)
                 final_message = str(err)[:240] or "Soil capture failed"
-                record.update(message="Capture failed; restoring the FarmBot position")
+                record.update(
+                    message=(
+                        "Capture failed; retaining position for measurement batch cleanup"
+                        if original_position is None
+                        else "Capture failed; restoring the FarmBot position"
+                    )
+                )
             finally:
                 if not initial_light_value:
                     try:
@@ -1040,7 +1086,9 @@ class FarmbotManager:
                             capture_id,
                             err,
                         )
-                if all(original_position.get(axis) is not None for axis in ("x", "y", "z")):
+                if original_position is not None and all(
+                    original_position.get(axis) is not None for axis in ("x", "y", "z")
+                ):
                     try:
                         await self.async_rpc_request(
                             [
@@ -1066,6 +1114,41 @@ class FarmbotManager:
                     message=final_message,
                     completed_at=dt_util.utcnow().isoformat(),
                 )
+
+    async def finish_soil_capture_batch(self, batch_id: str) -> dict[str, Any]:
+        """Restore the position saved by the first capture in a soil batch."""
+
+        batch = self._soil_capture_batches.get(batch_id)
+        if batch is None:
+            return {"status": "complete", "message": "Soil capture batch is already finished"}
+        original = batch["original_position"]
+        if not all(original.get(axis) is not None for axis in ("x", "y", "z")):
+            raise ValueError("Soil capture batch starting position is unavailable")
+        async with self._soil_capture_lock:
+            connection = self._live_connection_state()
+            if not connection["connected"]:
+                raise ValueError("FarmBot is not connected")
+            if connection["locked"]:
+                raise ValueError("FarmBot is emergency-stopped")
+            await self.async_rpc_request(
+                [
+                    self._move_command(
+                        **{axis: float(original[axis]) for axis in ("x", "y", "z")},
+                        speed=100,
+                        safe_z=True,
+                    )
+                ],
+                timeout=60,
+            )
+        self._soil_capture_batches.pop(batch_id, None)
+        _LOGGER.info(
+            "Finished soil capture batch %s and restored X %.1f Y %.1f Z %.1f",
+            batch_id,
+            float(original["x"]),
+            float(original["y"]),
+            float(original["z"]),
+        )
+        return {"status": "complete", "message": "FarmBot starting position restored"}
 
     async def _wait_for_soil_frame_image(
         self,

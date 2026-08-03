@@ -167,6 +167,10 @@
         "z_offsets_mm": {
           "name": "Z offsets",
           "description": "Use [0] for measurement or [0, 25, 50] for guided calibration."
+        },
+        "batch_id": {
+          "name": "Measurement batch ID",
+          "description": "Optional UUID that defers position restoration across sequential soil captures."
         }
       }
     },
@@ -181,6 +185,20 @@
         "capture_id": {
           "name": "Capture ID",
           "description": "UUID returned by Start Vision soil capture."
+        }
+      }
+    },
+    "finish_vision_soil_capture_batch": {
+      "name": "Finish Vision soil capture batch",
+      "description": "Finish a sequential soil measurement batch and restore its original FarmBot position.",
+      "fields": {
+        "config_entry_id": {
+          "name": "FarmBot",
+          "description": "The FarmBot that owns the measurement batch."
+        },
+        "batch_id": {
+          "name": "Measurement batch ID",
+          "description": "UUID supplied to each soil capture in the batch."
         }
       }
     },

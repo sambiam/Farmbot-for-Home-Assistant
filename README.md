@@ -128,7 +128,9 @@ only ever talks to Home Assistant's service/event API.
 - Inventory recognized soil-height points, run acknowledged safe-motion
   virtual-stereo captures, inspect their status, and apply a reviewed Z value
   (`farmbot.get_vision_soil_points`, `farmbot.start_vision_soil_capture`,
-  `farmbot.get_vision_soil_capture`, `farmbot.apply_vision_soil_height`)
+  `farmbot.get_vision_soil_capture`,
+  `farmbot.finish_vision_soil_capture_batch`,
+  `farmbot.apply_vision_soil_height`)
 - Propose a plant-radius change, either as a dry-run or an actual write
   (`farmbot.apply_vision_radius`)
 - Create/update a FarmBot Vision-owned spread curve and assign it to plants
@@ -161,9 +163,11 @@ value:
   different bot is always rejected.
 - Soil-height writes require explicit human approval, recognized soil metadata,
   and an unchanged GenericPointer snapshot. Only its `z` field is patched.
-- Soil captures refuse disconnected, busy, emergency-stopped, or out-of-bounds
-  bots; use acknowledged safe-Z movement; and restore the initial position when
-  possible. Stopping the app workflow never sends an emergency stop.
+- Soil captures refuse disconnected, externally busy, emergency-stopped, or
+  out-of-bounds bots and use acknowledged safe-Z movement. Sequential captures
+  in the same measurement batch serialize behind one another without treating
+  their own worker as externally busy, then restore the batch's initial
+  position once. Stopping the app workflow never sends an emergency stop.
 
 ### `get_vision_image` response contract
 
@@ -323,7 +327,8 @@ have) rather than the original download; an app that verified `sha256`
 against the base64 payload now succeeds where it previously would have
 mismatched. A companion app that consumes the new fields should declare a
 minimum required integration version of **1.2.0**; soil-height acquisition
-requires **1.8.0** for clear-site relocation.
+requires **1.8.0** for clear-site relocation. Efficient multi-point soil
+batches require **2.9.0**.
 
 ## License
 

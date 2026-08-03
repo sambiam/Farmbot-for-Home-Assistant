@@ -146,6 +146,11 @@ start_vision_soil_capture:
       required: true
       selector:
         object:
+    batch_id:
+      required: false
+      description: Optional UUID grouping sequential captures so position restoration is deferred.
+      selector:
+        text:
 
 get_vision_soil_capture:
   fields:
@@ -156,6 +161,19 @@ get_vision_soil_capture:
           integration: farmbot
     capture_id:
       required: true
+      selector:
+        text:
+
+finish_vision_soil_capture_batch:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: farmbot
+    batch_id:
+      required: true
+      description: UUID supplied to the captures in this batch.
       selector:
         text:
 
