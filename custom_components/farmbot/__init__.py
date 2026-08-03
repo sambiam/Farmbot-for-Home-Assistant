@@ -944,7 +944,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
     async def finish_vision_soil_capture_batch(call: ServiceCall) -> dict:
         manager = _get_manager(hass, call.data["config_entry_id"])
         try:
-            return await manager.finish_soil_capture_batch(call.data["batch_id"])
+            return manager.finish_soil_capture_batch(call.data["batch_id"])
         except ValueError as err:
             return {"status": "rejected", "message": str(err)[:240]}
 

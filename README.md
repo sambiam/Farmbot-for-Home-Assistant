@@ -328,7 +328,9 @@ against the base64 payload now succeeds where it previously would have
 mismatched. A companion app that consumes the new fields should declare a
 minimum required integration version of **1.2.0**; soil-height acquisition
 requires **1.8.0** for clear-site relocation. Efficient multi-point soil
-batches require **2.9.0**.
+batches require **2.9.1**. The batch-finish service is pollable and returns
+immediately while the final capture completes and the original position is
+restored, avoiding Home Assistant service-call timeouts on longer runs.
 
 ## License
 

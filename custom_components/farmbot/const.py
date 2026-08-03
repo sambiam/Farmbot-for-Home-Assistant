@@ -30,7 +30,7 @@ VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
-INTEGRATION_VERSION = "2.9.0"
+INTEGRATION_VERSION = "2.9.1"
 VISION_CAPABILITIES = [
     "photo_grid_repair",
     "verified_photo_grid_repair",

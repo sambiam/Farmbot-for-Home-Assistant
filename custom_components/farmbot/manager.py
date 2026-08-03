@@ -158,6 +158,8 @@ class FarmbotManager:
         self._soil_capture_tasks: set[asyncio.Task] = set()
         self._soil_capture_task_batches: dict[asyncio.Task, str | None] = {}
         self._soil_capture_batches: dict[str, dict[str, Any]] = {}
+        self._soil_batch_finish_tasks: dict[str, asyncio.Task] = {}
+        self._soil_batch_finish_results: dict[str, dict[str, str]] = {}
         self._claimed_soil_image_ids: set[int] = set()
         self.grid_repairs: dict[str, dict[str, Any]] = {}
         self._grid_repair_tasks: set[asyncio.Task] = set()
@@ -1115,40 +1117,95 @@ class FarmbotManager:
                     completed_at=dt_util.utcnow().isoformat(),
                 )
 
-    async def finish_soil_capture_batch(self, batch_id: str) -> dict[str, Any]:
-        """Restore the position saved by the first capture in a soil batch."""
+    def finish_soil_capture_batch(self, batch_id: str) -> dict[str, str]:
+        """Queue one batch restore and return its current status immediately."""
+
+        result = self._soil_batch_finish_results.get(batch_id)
+        if result is not None:
+            return dict(result)
+        if batch_id not in self._soil_capture_batches:
+            return {"status": "complete", "message": "Soil capture batch is already finished"}
+        active = self._soil_batch_finish_tasks.get(batch_id)
+        if active is not None and not active.done():
+            return {
+                "status": "running",
+                "message": "Waiting to restore the FarmBot starting position",
+            }
+        self._soil_batch_finish_results[batch_id] = {
+            "status": "queued",
+            "message": "FarmBot position restoration queued",
+        }
+        task = asyncio.create_task(
+            self._run_soil_batch_finish(batch_id),
+            name=f"farmbot-soil-finish-{batch_id}",
+        )
+        self._soil_batch_finish_tasks[batch_id] = task
+        task.add_done_callback(lambda _task: self._soil_batch_finish_tasks.pop(batch_id, None))
+        return dict(self._soil_batch_finish_results[batch_id])
+
+    async def _run_soil_batch_finish(self, batch_id: str) -> None:
+        """Wait behind the last capture and restore without holding an HTTP request."""
 
         batch = self._soil_capture_batches.get(batch_id)
         if batch is None:
-            return {"status": "complete", "message": "Soil capture batch is already finished"}
+            self._soil_batch_finish_results[batch_id] = {
+                "status": "complete",
+                "message": "Soil capture batch is already finished",
+            }
+            return
         original = batch["original_position"]
-        if not all(original.get(axis) is not None for axis in ("x", "y", "z")):
-            raise ValueError("Soil capture batch starting position is unavailable")
-        async with self._soil_capture_lock:
-            connection = self._live_connection_state()
-            if not connection["connected"]:
-                raise ValueError("FarmBot is not connected")
-            if connection["locked"]:
-                raise ValueError("FarmBot is emergency-stopped")
-            await self.async_rpc_request(
-                [
-                    self._move_command(
-                        **{axis: float(original[axis]) for axis in ("x", "y", "z")},
-                        speed=100,
-                        safe_z=True,
-                    )
-                ],
-                timeout=60,
+        self._soil_batch_finish_results[batch_id] = {
+            "status": "running",
+            "message": "Waiting to restore the FarmBot starting position",
+        }
+        try:
+            if not all(original.get(axis) is not None for axis in ("x", "y", "z")):
+                raise ValueError("Soil capture batch starting position is unavailable")
+            async with self._soil_capture_lock:
+                connection = self._live_connection_state()
+                if not connection["connected"]:
+                    raise ValueError("FarmBot is not connected")
+                if connection["locked"]:
+                    raise ValueError("FarmBot is emergency-stopped")
+                await self.async_rpc_request(
+                    [
+                        self._move_command(
+                            **{axis: float(original[axis]) for axis in ("x", "y", "z")},
+                            speed=100,
+                            safe_z=True,
+                        )
+                    ],
+                    timeout=60,
+                )
+            self._soil_capture_batches.pop(batch_id, None)
+            self._soil_batch_finish_results[batch_id] = {
+                "status": "complete",
+                "message": "FarmBot starting position restored",
+            }
+            _LOGGER.info(
+                "Finished soil capture batch %s and restored X %.1f Y %.1f Z %.1f",
+                batch_id,
+                float(original["x"]),
+                float(original["y"]),
+                float(original["z"]),
             )
-        self._soil_capture_batches.pop(batch_id, None)
-        _LOGGER.info(
-            "Finished soil capture batch %s and restored X %.1f Y %.1f Z %.1f",
-            batch_id,
-            float(original["x"]),
-            float(original["y"]),
-            float(original["z"]),
-        )
-        return {"status": "complete", "message": "FarmBot starting position restored"}
+        except asyncio.CancelledError:
+            self._soil_batch_finish_results[batch_id] = {
+                "status": "failed",
+                "message": "FarmBot position restoration was interrupted",
+            }
+            raise
+        except Exception as err:  # pylint: disable=broad-except
+            message = str(err)[:240] or "FarmBot position restoration failed"
+            self._soil_batch_finish_results[batch_id] = {
+                "status": "failed",
+                "message": message,
+            }
+            _LOGGER.warning("Could not finish soil capture batch %s: %s", batch_id, err)
+        finally:
+            while len(self._soil_batch_finish_results) > 64:
+                oldest = next(iter(self._soil_batch_finish_results))
+                self._soil_batch_finish_results.pop(oldest, None)
 
     async def _wait_for_soil_frame_image(
         self,
@@ -2570,10 +2627,14 @@ update_device({{mounted_tool_id=0}}); find_home()"""
             task.cancel()
         for task in list(self._grid_repair_tasks):
             task.cancel()
+        for task in list(self._soil_batch_finish_tasks.values()):
+            task.cancel()
         if self._soil_capture_tasks:
             await asyncio.gather(*self._soil_capture_tasks, return_exceptions=True)
         if self._grid_repair_tasks:
             await asyncio.gather(*self._grid_repair_tasks, return_exceptions=True)
+        if self._soil_batch_finish_tasks:
+            await asyncio.gather(*self._soil_batch_finish_tasks.values(), return_exceptions=True)
         for future in self._pending_rpcs.values():
             if not future.done():
                 future.cancel()

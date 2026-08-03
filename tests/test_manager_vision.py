@@ -212,7 +212,10 @@ def test_finishing_soil_batch_restores_original_position_once():
             return {"kind": "rpc_ok"}
 
         manager.async_rpc_request = fake_rpc
-        result = await manager.finish_soil_capture_batch("batch-1")
+        queued = manager.finish_soil_capture_batch("batch-1")
+        assert queued["status"] == "queued"
+        await manager._soil_batch_finish_tasks["batch-1"]
+        result = manager.finish_soil_capture_batch("batch-1")
 
         assert result["status"] == "complete"
         assert "batch-1" not in manager._soil_capture_batches

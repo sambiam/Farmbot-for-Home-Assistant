@@ -3,6 +3,16 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.9.1 - 2026-08-03
+
+- **Fixed:** The soil-capture batch finish service now queues position
+  restoration and returns a pollable `queued`, `running`, `complete`, or
+  `failed` result immediately. It no longer holds the Home Assistant service
+  request open while waiting behind a capture, which previously caused
+  supervisor proxy timeouts and made the entire soil-height run fail.
+- **Fixed:** Batch-finish results are retained for idempotent polling, and
+  pending restoration tasks are cancelled cleanly during integration unload.
+
 ## 2.9.0 - 2026-08-03
 
 - **Fixed:** Soil captures from the same measurement batch may queue behind a

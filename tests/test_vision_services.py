@@ -650,7 +650,7 @@ def test_start_and_get_soil_capture_are_typed_and_asynchronous():
 
     manager.start_soil_capture = fake_start
 
-    async def fake_finish(value):
+    def fake_finish(value):
         finished.append(value)
         return {"status": "complete", "message": "restored"}
 
