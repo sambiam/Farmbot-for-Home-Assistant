@@ -713,6 +713,16 @@ start_vision_weeding:
       default: false
       selector:
         boolean:
+    verify_tool_on_mount:
+      required: false
+      default: false
+      selector:
+        boolean:
+    verify_tool_on_unmount:
+      required: false
+      default: false
+      selector:
+        boolean:
     avoid_tall_plants:
       required: false
       default: true

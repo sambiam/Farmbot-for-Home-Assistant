@@ -271,6 +271,7 @@ _WEEDING_POINT_SCHEMA = vol.Schema(
 _WEEDING_TARGET_SCHEMA = vol.Schema(
     {
         vol.Required("weed_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Required("transit_start"): _WEEDING_POINT_SCHEMA,
         vol.Required("start"): _WEEDING_POINT_SCHEMA,
         vol.Required("end"): _WEEDING_POINT_SCHEMA,
         vol.Required("soil_z"): vol.Coerce(float),
@@ -309,6 +310,8 @@ SERVICE_START_VISION_WEEDING_SCHEMA = vol.Schema(
             vol.Coerce(float), vol.Range(min=1, max=50)
         ),
         vol.Optional("manage_tool", default=False): cv.boolean,
+        vol.Optional("verify_tool_on_mount", default=False): cv.boolean,
+        vol.Optional("verify_tool_on_unmount", default=False): cv.boolean,
         vol.Optional("tool_name", default="Rotary Tool"): vol.All(
             cv.string, vol.Length(min=1, max=100)
         ),
@@ -1052,6 +1055,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 "approach_speed_percent",
                 "height_step_mm",
                 "manage_tool",
+                "verify_tool_on_mount",
+                "verify_tool_on_unmount",
                 "tool_name",
                 "tool_slot_x",
                 "tool_slot_y",

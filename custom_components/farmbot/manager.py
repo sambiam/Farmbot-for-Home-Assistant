@@ -963,9 +963,7 @@ class FarmbotManager:
                                 [
                                     {
                                         "kind": "wait",
-                                        "args": {
-                                            "milliseconds": SOIL_CAPTURE_SETTLE_MILLISECONDS
-                                        },
+                                        "args": {"milliseconds": SOIL_CAPTURE_SETTLE_MILLISECONDS},
                                     },
                                     {"kind": "take_photo", "args": {}},
                                 ],
@@ -1972,6 +1970,7 @@ class FarmbotManager:
         number = cls._lua_number
         start = weed["start"]
         end = weed["end"]
+        transit_start = weed["transit_start"]
         soil_z = float(weed["soil_z"])
         tool_height = float(settings["tool_height_mm"])
         safe_z = float(weed["travel_z"])
@@ -1991,6 +1990,7 @@ local limit={number(max_load)}
 local overloaded=false; local phase='idle'; local zoff={number(tool_height)}
 local ax={number(start["x"])}; local ay={number(start["y"])}
 local bx={number(end["x"])}; local by={number(end["y"])}
+local transitx={number(transit_start["x"])}; local transity={number(transit_start["y"])}
 local safez={number(safe_z)}; local soilz={number(soil_z)}
 local cutspd={cut_speed}; local approach={approach_speed}
 watch_pin(current,function(data)
@@ -1998,7 +1998,7 @@ watch_pin(current,function(data)
     overloaded=true; off(motor); toast('Rotary overload during '..phase,'warning')
   end
 end)
-move({{z=safez,speed=approach}})
+move({{x=transitx,y=transity,z=safez,speed=approach}})
 {waypoint_moves}
 move({{x=ax,y=ay,z=safez,speed=approach}})
 local fromx=ax; local fromy=ay; local tox=bx; local toy=by
@@ -2017,7 +2017,7 @@ for attempt=1,{attempts} do
     end
     if attempt > 1 then zoff=zoff+{number(height_step)} end
   end
-  off(motor); move({{z=safez,speed=approach}})
+  off(motor); move({{x=fromx,y=fromy,z=safez,speed=approach}})
   local tx=fromx; local ty=fromy; fromx=tox; fromy=toy; tox=tx; toy=ty
   move({{x=fromx,y=fromy,z=safez,speed=approach}})
 end
@@ -2080,6 +2080,8 @@ move({{x=bx,y=by,z=safez,speed=approach}})"""
                 raise ValueError("a weeding path exceeds the integration safety limit")
             cut_z = float(weed["soil_z"]) + float(settings["tool_height_mm"])
             values = {
+                "transit start X": (float(weed["transit_start"]["x"]), bounds.get("x")),
+                "transit start Y": (float(weed["transit_start"]["y"]), bounds.get("y")),
                 "start X": (float(start["x"]), bounds.get("x")),
                 "end X": (float(end["x"]), bounds.get("x")),
                 "start Y": (float(start["y"]), bounds.get("y")),
@@ -2111,7 +2113,7 @@ move({{x=bx,y=by,z=safez,speed=approach}})"""
 
     @classmethod
     def _mount_tool_lua(cls, settings: dict[str, Any]) -> str:
-        """Use FarmBot OS's standard helper, with a synthetic slot fallback."""
+        """Mount with raw slot motion unless the user opts into verification."""
         if settings.get("tool_slot_from_bot"):
             target = json.dumps(str(settings["tool_name"]))
             setup = ""
@@ -2135,21 +2137,9 @@ move({{x=bx,y=by,z=safez,speed=approach}})"""
                 f"z={number(settings['tool_slot_z'])},"
                 f"pullout_direction={int(settings['tool_pullout_direction'])}}}"
             )
-        return (
-            setup + "find_home(); "
-            f"mount_tool({target}); "
-            "if not verify_tool() then error('Rotary tool mounting was not verified') end"
-        )
-
-    @classmethod
-    def _dismount_tool_lua(cls, settings: dict[str, Any]) -> str:
-        """Use the standard helper when possible, or its documented slot motion."""
-        if settings.get("tool_slot_from_bot"):
-            return (
-                "dismount_tool(); "
-                "if verify_tool() then error('Rotary tool dismount was not verified') end; "
-                "find_home()"
-            )
+        if settings.get("verify_tool_on_mount"):
+            # FarmBot OS documents verification as built into this helper.
+            return setup + "find_home(); " + f"mount_tool({target})"
         number = cls._lua_number
         x = float(settings["tool_slot_x"])
         y = float(settings["tool_slot_y"])
@@ -2161,14 +2151,58 @@ move({{x=bx,y=by,z=safez,speed=approach}})"""
             3: (x, y + 100),
             4: (x, y - 100),
         }[direction]
-        return f"""if not verify_tool() then error('No rotary tool is mounted') end
-move({{z=safe_z()}})
-move({{x={number(front[0])},y={number(front[1])}}})
-move({{z={number(z)}}})
+        if settings.get("tool_id"):
+            tool_setup = f"local fbv_tool_id={int(settings['tool_id'])}; "
+        else:
+            tool_name = json.dumps(str(settings["tool_name"]))
+            tool_setup = (
+                f"local fbv_tool=get_tool{{name={tool_name}}}; "
+                "if not fbv_tool then error('Rotary tool was not found') end; "
+                "local fbv_tool_id=fbv_tool.id; "
+            )
+        return f"""{tool_setup}find_home()
+move({{x={number(front[0])},y={number(front[1])},z=safe_z()}})
+move_absolute({number(front[0])},{number(front[1])},{number(z + 50)},50)
+move_absolute({number(front[0])},{number(front[1])},{number(z)},50)
 move_absolute({number(x)},{number(y)},{number(z)},50)
-move({{z={number(z + 50)}}})
-if read_pin(63)==0 then error('Rotary tool dismount was not verified') end
-update_device({{mounted_tool_id=0}}); find_home()"""
+move_absolute({number(front[0])},{number(front[1])},{number(z)},50)
+move({{x={number(front[0])},y={number(front[1])},z=safe_z()}})
+update_device({{mounted_tool_id=fbv_tool_id}})"""
+
+    @classmethod
+    def _dismount_tool_lua(cls, settings: dict[str, Any]) -> str:
+        """Use the standard helper when possible, or its documented slot motion."""
+        if settings.get("tool_slot_from_bot") and settings.get("verify_tool_on_unmount"):
+            # FarmBot OS documents verification as built into this helper.
+            return "dismount_tool(); find_home()"
+        number = cls._lua_number
+        x = float(settings["tool_slot_x"])
+        y = float(settings["tool_slot_y"])
+        z = float(settings["tool_slot_z"])
+        direction = int(settings["tool_pullout_direction"])
+        front = {
+            1: (x + 100, y),
+            2: (x - 100, y),
+            3: (x, y + 100),
+            4: (x, y - 100),
+        }[direction]
+        precheck = (
+            "if not verify_tool() then error('No rotary tool is mounted') end\n"
+            if settings.get("verify_tool_on_unmount")
+            else ""
+        )
+        postcheck = (
+            "if read_pin(63)==0 then error('Rotary tool dismount was not verified') end\n"
+            if settings.get("verify_tool_on_unmount")
+            else ""
+        )
+        return f"""{precheck}local fbv_xyz=get_xyz()
+move({{x=fbv_xyz.x,y=fbv_xyz.y,z=safe_z()}})
+move({{x={number(x)},y={number(y)},z=safe_z()}})
+move_absolute({number(x)},{number(y)},{number(z)},50)
+move_absolute({number(front[0])},{number(front[1])},{number(z)},50)
+move_absolute({number(front[0])},{number(front[1])},{number(z + 50)},50)
+{postcheck}update_device({{mounted_tool_id=0}}); find_home()"""
 
     def start_weeding_run(
         self,

@@ -3,6 +3,15 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.10.0 - 2026-08-04
+
+- **Added:** Adaptive rotary weeding now supports independent, opt-in tool
+  verification after mounting and unmounting. Tool sensor failures no longer
+  block tool handling by default.
+- **Changed:** Every safe-height retract includes the current X/Y coordinate,
+  and every weed target declares its route start, preventing implicit motion
+  defaults from returning the gantry to an origin between weeds.
+
 ## 2.9.1 - 2026-08-03
 
 - **Fixed:** The soil-capture batch finish service now queues position
