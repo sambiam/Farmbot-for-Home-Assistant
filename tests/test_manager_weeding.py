@@ -41,6 +41,15 @@ def test_lua_watches_current_reverses_slows_raises_and_always_retracts():
     assert source.rstrip().endswith("move({x=bx,y=by,z=safez,speed=approach})")
 
 
+def test_lua_only_slows_the_descent_below_the_soil_risk_height():
+    source = FarmbotManager._weeding_lua(WEED, SETTINGS)
+    assert "local riskz=-300" in source
+    assert "if targetz < riskz then" in source
+    assert "move({x=fromx,y=fromy,z=riskz,speed=approach})" in source
+    assert "move({x=fromx,y=fromy,z=targetz,speed=25})" in source
+    assert "move({x=fromx,y=fromy,z=targetz,speed=approach})" in source
+
+
 def test_lua_uses_validated_tall_plant_approach_waypoints():
     source = FarmbotManager._weeding_lua(
         {**WEED, "approach_waypoints": [{"x": 300, "y": 350}, {"x": 400, "y": 400}]},

@@ -3,6 +3,14 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.11.0 - 2026-08-05
+
+- **Changed:** Adaptive weeding descents now use the configured approach speed
+  down to Z = -300 mm and reserve the cautious 25% speed for the final
+  soil-risk portion. This removes long slow descents that could trigger
+  FarmBot's movement timeout while retaining slow contact protection near the
+  estimated soil height.
+
 ## 2.10.0 - 2026-08-04
 
 - **Added:** Adaptive rotary weeding now supports independent, opt-in tool

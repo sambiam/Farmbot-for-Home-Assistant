@@ -1993,6 +1993,7 @@ local bx={number(end["x"])}; local by={number(end["y"])}
 local transitx={number(transit_start["x"])}; local transity={number(transit_start["y"])}
 local safez={number(safe_z)}; local soilz={number(soil_z)}
 local cutspd={cut_speed}; local approach={approach_speed}
+local riskz=-300
 watch_pin(current,function(data)
   if tonumber(data.value) and tonumber(data.value) > limit and not overloaded then
     overloaded=true; off(motor); toast('Rotary overload during '..phase,'warning')
@@ -2004,7 +2005,13 @@ move({{x=ax,y=ay,z=safez,speed=approach}})
 local fromx=ax; local fromy=ay; local tox=bx; local toy=by
 for attempt=1,{attempts} do
   overloaded=false; phase='lower'; on(motor)
-  move({{x=fromx,y=fromy,z=soilz+zoff,speed=25}})
+  local targetz=soilz+zoff
+  if targetz < riskz then
+    move({{x=fromx,y=fromy,z=riskz,speed=approach}})
+    move({{x=fromx,y=fromy,z=targetz,speed=25}})
+  else
+    move({{x=fromx,y=fromy,z=targetz,speed=approach}})
+  end
   if overloaded then
     zoff=zoff+{number(height_step)}
   else
