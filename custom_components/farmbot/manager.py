@@ -1999,6 +1999,7 @@ watch_pin(current,function(data)
     overloaded=true; off(motor); toast('Rotary overload during '..phase,'warning')
   end
 end)
+move({{z=safez,speed=approach}})
 move({{x=transitx,y=transity,z=safez,speed=approach}})
 {waypoint_moves}
 move({{x=ax,y=ay,z=safez,speed=approach}})
@@ -2080,6 +2081,8 @@ move({{x=bx,y=by,z=safez,speed=approach}})"""
                 raise ValueError("tool pullout path leaves FarmBot's Y axis bounds")
         for weed in weeds:
             start, end = weed["start"], weed["end"]
+            if float(weed["travel_z"]) < -100:
+                raise ValueError("adaptive weeding travel Z must be -100 mm or higher")
             if (
                 math.hypot(float(end["x"]) - float(start["x"]), float(end["y"]) - float(start["y"]))
                 > WEEDING_MAX_PATH_MM

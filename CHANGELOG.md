@@ -3,6 +3,13 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.12.0 - 2026-08-05
+
+- **Changed:** Adaptive weeding now raises Z vertically before its first X/Y
+  transit and rejects any requested travel height below Z = -100 mm. This
+  prevents diagonal low-height movement through exclusion-zone hazards such
+  as tool changers.
+
 ## 2.11.0 - 2026-08-05
 
 - **Changed:** Adaptive weeding descents now use the configured approach speed

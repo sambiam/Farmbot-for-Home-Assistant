@@ -34,6 +34,9 @@ def test_lua_watches_current_reverses_slows_raises_and_always_retracts():
     assert "math.floor(cutspd/2)" in source
     assert "zoff=zoff+10" in source
     assert "fromx=tox" in source
+    assert source.index("move({z=safez,speed=approach})") < source.index(
+        "move({x=transitx,y=transity,z=safez"
+    )
     assert source.index("move({x=transitx,y=transity,z=safez") < source.index(
         "move({x=ax,y=ay,z=safez"
     )
@@ -76,6 +79,23 @@ def test_weeding_plan_rejects_out_of_bounds_before_movement():
     }
     with pytest.raises(ValueError, match="end X"):
         manager.plan_weeding(weeds=[invalid], settings=SETTINGS, firmware_config={})
+
+
+def test_weeding_plan_rejects_low_transit_height_before_movement():
+    manager = object.__new__(FarmbotManager)
+    manager.soil_motion_state = lambda _firmware: {
+        "connected": True,
+        "locked": False,
+        "busy": False,
+        "position": {"x": 0, "y": 0, "z": 0},
+        "axis_bounds": {"x": (0, 1000), "y": (0, 1000), "z": (-500, 0)},
+    }
+    with pytest.raises(ValueError, match="travel Z must be -100 mm or higher"):
+        manager.plan_weeding(
+            weeds=[{**WEED, "travel_z": -101}],
+            settings=SETTINGS,
+            firmware_config={},
+        )
 
 
 def test_farmbot_slot_uses_standard_mount_and_dismount_helpers():
