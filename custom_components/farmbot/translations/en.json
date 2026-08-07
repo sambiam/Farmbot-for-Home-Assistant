@@ -246,7 +246,7 @@
     },
     "apply_vision_soil_height": {
       "name": "Apply Vision soil height",
-      "description": "Revalidate and replace a stale soil point with a reviewed clear-soil X, Y and Z measurement.",
+      "description": "Create a soil-height point or update a nearby one with a reviewed clear-soil X, Y and Z measurement.",
       "fields": {
         "config_entry_id": {
           "name": "FarmBot",
@@ -254,7 +254,7 @@
         },
         "point_id": {
           "name": "Soil point ID",
-          "description": "ID of the existing soil-height GenericPointer."
+          "description": "Optional existing soil-height point to update. Leave empty to create a new point."
         },
         "measurement_id": {
           "name": "Measurement ID",
@@ -278,11 +278,11 @@
         },
         "recommended_x": {
           "name": "Recommended X",
-          "description": "Reviewed clear-soil X, less than 200 mm from the stale point."
+          "description": "Reviewed clear-soil X, less than 200 mm from an existing point when one is supplied."
         },
         "recommended_y": {
           "name": "Recommended Y",
-          "description": "Reviewed clear-soil Y, less than 200 mm from the stale point."
+          "description": "Reviewed clear-soil Y, less than 200 mm from an existing point when one is supplied."
         },
         "recommended_z_mm": {
           "name": "Recommended Z",

@@ -1,4 +1,5 @@
 """A fake FarmbotApiClient double for testing the Vision service handlers."""
+
 from custom_components.farmbot import vision
 from custom_components.farmbot.api import FarmbotApiError, FarmbotAuthError
 
@@ -12,8 +13,14 @@ class FakeVisionApi:
     """
 
     def __init__(
-        self, *, points=None, images=None, curves=None, calibration=None,
-        firmware_config=None, reauth_callback=None
+        self,
+        *,
+        points=None,
+        images=None,
+        curves=None,
+        calibration=None,
+        firmware_config=None,
+        reauth_callback=None,
     ):
         self.points = {p["id"]: dict(p) for p in (points or [])}
         self.images = {i["id"]: dict(i) for i in (images or [])}
@@ -62,7 +69,8 @@ class FakeVisionApi:
         self._record("async_get_points")
         points = list(self.points.values())
         return [
-            point for point in points
+            point
+            for point in points
             if pointer_type is None or point.get("pointer_type") == pointer_type
         ]
 
@@ -128,6 +136,27 @@ class FakeVisionApi:
         if point_id in self.points:
             self.points[point_id].update({"x": x, "y": y, "z": z})
         return self.points.get(point_id, {})
+
+    async def async_create_soil_point(self, *, name, x, y, z):
+        self._record("async_create_soil_point")
+        point = {
+            "id": self.next_point_id,
+            "device_id": 42,
+            "pointer_type": "GenericPointer",
+            "name": name,
+            "x": x,
+            "y": y,
+            "z": z,
+            "updated_at": "2026-08-07T00:00:00Z",
+            "discarded_at": None,
+            "meta": {
+                "created_by": "measure-soil-height",
+                "at_soil_level": "true",
+            },
+        }
+        self.next_point_id += 1
+        self.points[point["id"]] = point
+        return point
 
     async def async_create_weed(self, *, name, x, y, z, radius):
         self._record("async_create_weed")

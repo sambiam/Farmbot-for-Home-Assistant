@@ -311,10 +311,10 @@ which coordinate system a calibration belongs to.
 ### Minimum FarmBot Vision app version
 
 Clear-site soil-height measurement requires integration version **1.8.0**.
-It extends the four typed soil services with stale-point timestamp checks and
-reviewed X/Y relocation (strictly less than 200 mm) while retaining FarmBot RPC
-acknowledgement handling and the existing image contract. Earlier app features
-remain compatible with older integrations.
+Integration version **2.13.0** removes the former 14-day relocation gate and
+allows a reviewed custom-coordinate result to create a Vision-owned soil point
+when no existing point is supplied. Existing-point updates retain timestamp
+and coordinate concurrency checks and the strict 200 mm relocation limit.
 
 The `1.2.0` `get_vision_image` response added
 `source_sha256`, `source_width`/`source_height`, `oriented_width`/

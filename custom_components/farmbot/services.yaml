@@ -224,7 +224,8 @@ apply_vision_soil_height:
         config_entry:
           integration: farmbot
     point_id:
-      required: true
+      required: false
+      description: Existing nearby soil point to update. Omit to create a new soil-height point.
       selector:
         number:
           min: 1
@@ -234,25 +235,25 @@ apply_vision_soil_height:
       selector:
         text:
     expected_x:
-      required: true
+      required: false
       selector:
         number:
           mode: box
           step: any
     expected_y:
-      required: true
+      required: false
       selector:
         number:
           mode: box
           step: any
     expected_z:
-      required: true
+      required: false
       selector:
         number:
           mode: box
           step: any
     expected_updated_at:
-      required: true
+      required: false
       selector:
         text:
     recommended_x:

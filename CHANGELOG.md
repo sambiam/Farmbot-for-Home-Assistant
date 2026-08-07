@@ -3,6 +3,14 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.13.0 - 2026-08-07
+
+- **Changed:** Soil-height capture and application no longer require an
+  existing soil point to be at least 14 days old.
+- **Added:** Vision can apply a soil-height result without a point ID, creating
+  a new soil-height GenericPointer at the measured coordinate. Existing-point
+  updates retain their coordinate, timestamp, type, and movement safeguards.
+
 ## 2.12.0 - 2026-08-05
 
 - **Changed:** Adaptive weeding now raises Z vertically before its first X/Y

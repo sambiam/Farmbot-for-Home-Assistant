@@ -342,6 +342,26 @@ class FarmbotApiClient:
         )
         return data if isinstance(data, dict) else {}
 
+    async def async_create_soil_point(self, *, name: str, x: float, y: float, z: float) -> dict:
+        """Create a Vision-owned soil-height GenericPointer."""
+        data = await self._request_json(
+            "POST",
+            "/points",
+            json_body={
+                "pointer_type": "GenericPointer",
+                "name": name,
+                "x": x,
+                "y": y,
+                "z": z,
+                "meta": {
+                    "created_by": "measure-soil-height",
+                    "at_soil_level": "true",
+                },
+            },
+            idempotent=False,
+        )
+        return data if isinstance(data, dict) else {}
+
     async def async_create_weed(
         self, *, name: str, x: float, y: float, z: float, radius: float
     ) -> dict:

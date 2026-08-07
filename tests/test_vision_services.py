@@ -843,7 +843,7 @@ def test_apply_soil_height_requires_approval_and_detects_stale_point():
     assert conflict["status"] == "conflict"
 
 
-def test_soil_relocation_requires_stale_point_and_less_than_200_mm():
+def test_soil_relocation_allows_fresh_point_but_stays_below_200_mm():
     hass = FakeHass()
     manager, _ = _make_bot(hass)
     manager.api.points[70] = _soil_point(updated_at="2999-01-01T00:00:00Z")
@@ -862,7 +862,7 @@ def test_soil_relocation_requires_stale_point_and_less_than_200_mm():
             },
         )
     )
-    assert fresh["status"] == "rejected"
+    assert fresh["status"] == "queued"
 
     manager.api.points[70]["updated_at"] = "2026-07-01T00:00:00Z"
     too_far = _run(
@@ -880,7 +880,7 @@ def test_soil_relocation_requires_stale_point_and_less_than_200_mm():
     assert too_far["status"] == "rejected"
 
 
-def test_apply_soil_relocation_rechecks_age_and_update_timestamp():
+def test_apply_soil_relocation_allows_fresh_point_and_rechecks_timestamp():
     hass = FakeHass()
     manager, _ = _make_bot(hass)
     manager.api.points[70] = _soil_point(updated_at="2999-01-01T00:00:00Z")
@@ -902,12 +902,40 @@ def test_apply_soil_relocation_rechecks_age_and_update_timestamp():
     }
 
     fresh = _run(_call(hass, SERVICE_APPLY_VISION_SOIL_HEIGHT, payload))
-    assert fresh["status"] == "rejected"
+    assert fresh["status"] == "applied"
 
-    manager.api.points[70]["updated_at"] = "2026-07-01T00:00:00Z"
+    manager.api.points[70] = _soil_point(updated_at="2026-07-01T00:00:00Z")
     changed = _run(_call(hass, SERVICE_APPLY_VISION_SOIL_HEIGHT, payload))
     assert changed["status"] == "conflict"
-    assert "async_patch_soil_point" not in manager.api.calls
+
+
+def test_apply_soil_height_creates_point_when_no_replacement_is_supplied():
+    hass = FakeHass()
+    manager, _ = _make_bot(hass)
+    _async_register_services(hass)
+
+    result = _run(
+        _call(
+            hass,
+            SERVICE_APPLY_VISION_SOIL_HEIGHT,
+            {
+                "config_entry_id": "entry-1",
+                "measurement_id": str(uuid.uuid4()),
+                "recommended_x": 400,
+                "recommended_y": 500,
+                "recommended_z_mm": -287,
+                "confidence": 0.91,
+                "apply": True,
+                "human_approved": True,
+            },
+        )
+    )
+
+    assert result["status"] == "applied"
+    created = manager.api.points[result["point_id"]]
+    assert created["pointer_type"] == "GenericPointer"
+    assert created["meta"]["created_by"] == "measure-soil-height"
+    assert (created["x"], created["y"], created["z"]) == (400, 500, -287)
 
 
 # --------------------------- apply_vision_radius ---------------------------
