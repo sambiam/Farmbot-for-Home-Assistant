@@ -24,13 +24,57 @@ TOKEN_REFRESH_INTERVAL = 6 * 60 * 60  # Check every 6 hours
 # to become a vision request without depending on a particular log message or
 # firmware version. Only metadata is fetched here; JPEG bytes remain on-demand.
 VISION_IMAGE_POLL_INTERVAL_SECONDS = 15
+# A FarmBot cloud/DNS outage must not turn the 15 s image poll into 15 s
+# tracebacks. Consecutive failures back off exponentially from one poll
+# interval up to this ceiling, and the poll resumes its normal cadence on the
+# first success. Cloud REST health is tracked separately from MQTT device
+# state, so this backoff never affects realtime entities.
+VISION_IMAGE_POLL_BACKOFF_MAX_SECONDS = 300
+
+# --------------------------------------------------------------------------
+# Device state, availability and optimistic command reconciliation
+# --------------------------------------------------------------------------
+
+# How long an entity keeps showing the state a user just asked for while it
+# waits for FarmBot to report back. FarmBot's own confirmation is typically
+# observed ~5 s after the write_pin RPC (queued behind whatever the bot is
+# doing), so the window has to comfortably exceed that; beyond it, a command
+# that never took effect must not keep the entity lying indefinitely.
+OPTIMISTIC_STATE_TIMEOUT_SECONDS = 15
+
+# FarmBot's MQTT broker is FarmBot's cloud broker, not the bot itself, so a
+# live broker connection does not prove the device is alive. Availability
+# therefore also requires a status broadcast (or a fresh connection) within
+# this window. It is deliberately generous: a partial status payload, a
+# momentary broker blip or a quiet bot must never make a working peripheral
+# look unavailable.
+DEVICE_STATE_STALE_SECONDS = 600
+
+# FarmBot state keys whose values are never safe to log. FarmBot's state tree
+# carries the Farmware environment, which is where API keys, tokens and
+# third-party credentials are stored by Farmware authors.
+SENSITIVE_STATE_KEYS = (
+    "user_env",
+    "farmware_envs",
+    "env",
+    "token",
+    "password",
+    "secret",
+    "api_key",
+    "private_key",
+    "credentials",
+)
+
+# Throttle for repeated "FarmBot API is unreachable" warnings on the sequence
+# select entity, which polls every 5 minutes.
+SEQUENCE_FETCH_FAILURE_LOG_INTERVAL_SECONDS = 1800
 
 # --------------------------------------------------------------------------
 # FarmBot Vision bridge
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
-INTEGRATION_VERSION = "2.9.1"
+INTEGRATION_VERSION = "2.15.0"
 VISION_CAPABILITIES = [
     "photo_grid_repair",
     "verified_photo_grid_repair",
@@ -58,6 +102,11 @@ VISION_CAPABILITIES = [
     # only pre-validated straight cuts and keeps current recovery inside one
     # FarmBot OS Lua command so an overload can turn the tool off immediately.
     "adaptive_rotary_weeding",
+    # Plain supervised positioning: read live motion state, move to an absolute
+    # or relative coordinate, and switch a peripheral pin. No photography and no
+    # analysis -- this is what the Vision app's positioning tab, grow-light
+    # schedule and park position are built on.
+    "vision_positioning",
 ]
 
 # Service names (existing)
@@ -89,6 +138,10 @@ SERVICE_START_VISION_GCODE = "start_vision_gcode"
 SERVICE_GET_VISION_GCODE = "get_vision_gcode"
 SERVICE_START_VISION_WEEDING = "start_vision_weeding"
 SERVICE_GET_VISION_WEEDING = "get_vision_weeding"
+SERVICE_GET_VISION_MOTION = "get_vision_motion"
+SERVICE_START_VISION_MOVE = "start_vision_move"
+SERVICE_GET_VISION_MOVE = "get_vision_move"
+SERVICE_SET_VISION_PERIPHERAL = "set_vision_peripheral"
 
 # Home Assistant event fired for farmbot.request_vision_analysis
 EVENT_VISION_REQUEST = "farmbot_vision_request"
@@ -225,6 +278,26 @@ GCODE_MAX_FEED_MM_PER_MIN = 3000.0
 # `movement_max_spd_*` is missing, where "unknown" must mean slow.
 GCODE_MIN_STEPS_PER_SECOND = 10.0
 GCODE_FALLBACK_MAX_STEPS_PER_SECOND = 800.0
+
+# --------------------------------------------------------------------------
+# Supervised positioning (farmbot.start_vision_move / get_vision_motion)
+#
+# A positioning move is an ordinary FarmBot OS `move`, so FarmBot's own motion
+# planning still applies. What this integration adds is the same discipline the
+# photo-grid path already uses: bounds resolved from firmware config, one
+# acknowledged RPC, and a live-status check that the gantry actually arrived.
+# --------------------------------------------------------------------------
+MOVE_RPC_TIMEOUT_SECONDS = 300
+MOVE_POSITION_TOLERANCE_MM = 15.0
+MOVE_POSITION_TIMEOUT_SECONDS = 180
+# Peripheral pins a positioning caller may switch. Deliberately the same set the
+# switch platform exposes, so the Vision app can drive a grow light without the
+# service becoming a general-purpose "write any pin" escape hatch.
+POSITIONING_PERIPHERAL_PINS = (2, 3, 7, 8, 9, 10, 12)
+# Firmware config only changes when the operator edits it, but the Vision app's
+# positioning tab polls motion state every couple of seconds. Cache it so a live
+# position readout costs no FarmBot REST traffic in the steady state.
+MOTION_CONFIG_CACHE_SECONDS = 300
 
 # Adaptive rotary-tool weeding. These are hard integration-side ceilings; the
 # Vision app may choose more conservative values.

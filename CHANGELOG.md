@@ -3,6 +3,62 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.15.0 - 2026-08-10
+
+- **Added:** Supervised positioning services for the FarmBot Vision app's new
+  positioning tab, advertised as the `vision_positioning` capability.
+  `farmbot.get_vision_motion` returns live position, axis bounds, connected /
+  busy / emergency-stop state and peripheral pin states.
+  `farmbot.start_vision_move` queues one bounds-checked absolute or relative
+  move, and `farmbot.get_vision_move` reports whether FarmBot actually arrived.
+  `farmbot.set_vision_peripheral` switches one peripheral pin (2, 3, 7, 8, 9,
+  10 or 12) through an acknowledged command, which is what makes a grow-light
+  schedule possible.
+- **Added:** Firmware motion configuration is cached for five minutes, so a
+  positioning UI polling motion state costs no FarmBot REST traffic.
+- **Changed:** Soil capture, photo-grid repair, raw G-code and adaptive weeding
+  now also treat a queued positioning move as "FarmBot is busy", so the two
+  cannot interleave.
+- **Fixed:** `INTEGRATION_VERSION`, which `farmbot.list_vision_bots` reports to
+  the Vision app, had been left at 2.9.1 while the manifest moved on.
+- **Fixed:** Switch and emergency-stop entities no longer call
+  `async_write_ha_state` from a worker thread. Home Assistant classifies an
+  undecorated synchronous dispatcher target as an executor job and runs it off
+  the event loop; every FarmBot dispatcher callback is now marked `@callback`,
+  so state updates stay on the loop. This removes the "calls
+  async_write_ha_state from a thread other than the event loop" error.
+- **Fixed:** Toggling a switch no longer flicks back. A dispatched command sets
+  the entity to the requested state immediately, a contradictory FarmBot state
+  arriving within a 15-second grace period is treated as a stale packet, and
+  the newest command always wins. If FarmBot never confirms, the entity reverts
+  to the reported state and logs a warning instead of staying optimistic.
+- **Fixed:** A FarmBot state payload that omits `pins` (or names only some
+  pins) no longer erases the pin states the integration already knew. Payloads
+  are merged into one authoritative cached state in the manager instead of
+  replacing it wholesale, so the lighting switch keeps its value through
+  partial updates.
+- **Fixed:** Entity availability now comes from FarmBot's connection health
+  (MQTT connected, plus a status broadcast within 10 minutes) rather than from
+  whether the newest payload happened to mention the entity. Reading a pin can
+  no longer raise, so an unexpected `pins` shape can no longer cost an entity
+  its place on the platform and leave it stuck as `unavailable`.
+- **Fixed:** A transient DNS or API failure no longer produces a traceback from
+  `select.farmbot_sequence` on every polling cycle. Sequence retrieval moved
+  from a blocking `requests` call to the integration's async API client
+  (shared timeouts, bounded retries, single reauth trigger), keeps the
+  previously fetched options through an outage, and throttles its warnings.
+- **Fixed:** FarmBot Vision image polling backs off exponentially (15 s up to
+  5 minutes) during a cloud/DNS outage instead of logging an identical warning
+  every 15 seconds, retains its known-image baseline, and recovers
+  automatically. Cloud REST health is tracked separately from MQTT device
+  state, so a FarmBot cloud outage never makes realtime entities unavailable.
+- **Changed:** A command that could not be published now raises instead of
+  being silently dropped by an `assert`, and the entity does not move.
+- **Changed:** Pin-backed and device-state entities report `unknown` rather
+  than `off` until FarmBot has reported them at least once, and FarmBot state
+  included in debug logging is redacted (the Farmware environment can hold API
+  keys).
+
 ## 2.13.0 - 2026-08-07
 
 - **Changed:** Soil-height capture and application no longer require an

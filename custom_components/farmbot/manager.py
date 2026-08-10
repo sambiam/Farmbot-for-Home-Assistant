@@ -4,13 +4,14 @@ import logging
 import math
 import re
 import ssl
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Tuple
 
 import paho.mqtt.client as mqtt
-import requests
+from homeassistant.core import callback
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
@@ -22,6 +23,7 @@ from .const import (
     API_BASE_URL,
     DEFAULT_VISION_ENABLED,
     DEFAULT_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+    DEVICE_STATE_STALE_SECONDS,
     EVENT_BUTTON_INPUT,
     EVENT_VISION_REQUEST,
     GCODE_CHUNK_RPC_TIMEOUT_SECONDS,
@@ -34,9 +36,15 @@ from .const import (
     GRID_REPAIR_MAX_PHOTO_ATTEMPTS,
     GRID_REPAIR_POSITION_TIMEOUT_SECONDS,
     GRID_REPAIR_POSITION_TOLERANCE_MM,
+    MOTION_CONFIG_CACHE_SECONDS,
+    MOVE_POSITION_TIMEOUT_SECONDS,
+    MOVE_POSITION_TOLERANCE_MM,
+    MOVE_RPC_TIMEOUT_SECONDS,
     MQTT_PORT,
     OPTION_VISION_ENABLED,
     OPTION_VISION_HEARTBEAT_TIMEOUT_MINUTES,
+    POSITIONING_PERIPHERAL_PINS,
+    SENSITIVE_STATE_KEYS,
     SIGNAL_BUTTON_INPUT,
     SIGNAL_SEQUENCE_SELECTED,
     SIGNAL_STATE,
@@ -54,6 +62,8 @@ from .const import (
     TOPIC_FROM_DEVICE,
     TOPIC_LOGS,
     TOPIC_STATUS,
+    VISION_IMAGE_POLL_BACKOFF_MAX_SECONDS,
+    VISION_IMAGE_POLL_INTERVAL_SECONDS,
     WEEDING_MAX_ATTEMPTS,
     WEEDING_MAX_PATH_MM,
     WEEDING_RPC_TIMEOUT_SECONDS,
@@ -76,6 +86,62 @@ def _mask(s: str, keep_start: int = 4, keep_end: int = 4) -> str:
     if len(s) <= keep_start + keep_end:
         return "*" * len(s)
     return f"{s[:keep_start]}…{s[-keep_end:]}"
+
+
+def merge_state(base: Any, incoming: Any) -> Any:
+    """Return ``base`` with ``incoming`` merged into it, without mutating either.
+
+    FarmBot publishes its state tree on ``bot/<device>/status``. Whether a
+    given firmware sends a whole snapshot or only the subtree that changed is
+    not something a client can tell from the payload itself, so this
+    integration treats every payload as *at least* authoritative for the keys
+    it carries and never as a statement about the keys it omits. A payload of
+    ``{"location_data": {...}}`` therefore leaves the previously reported
+    ``pins`` intact instead of erasing them, and a ``pins`` payload naming
+    only pin 8 leaves pin 7's last known value alone.
+
+    Values present in ``incoming`` always win, including explicit ``None``
+    (FarmBot uses ``null`` for "this axis position is genuinely unknown", so
+    that is real information, not a gap). Only *absent* keys fall through to
+    the cached value.
+
+    The result shares structure with ``base`` wherever nothing changed and
+    copies only along updated paths, so a reader that already holds a
+    reference to the previous tree keeps seeing a complete, consistent
+    snapshot while a new one is being built on the MQTT thread.
+    """
+    if not isinstance(base, dict) or not isinstance(incoming, dict):
+        return incoming
+    merged = dict(base)
+    for key, value in incoming.items():
+        current = base.get(key)
+        if isinstance(value, dict) and isinstance(current, dict):
+            merged[key] = merge_state(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def redact_state(value: Any, _depth: int = 0) -> Any:
+    """Return a copy of FarmBot state with credential-bearing values removed.
+
+    FarmBot's state tree carries the Farmware environment, which is where
+    Farmware authors keep API keys and third-party credentials. Diagnostic
+    logging of state goes through here so a debug log can never spill them.
+    """
+    if _depth > 6:
+        return "…"
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            if str(key).lower() in SENSITIVE_STATE_KEYS:
+                redacted[key] = "<redacted>"
+            else:
+                redacted[key] = redact_state(item, _depth + 1)
+        return redacted
+    if isinstance(value, list):
+        return [redact_state(item, _depth + 1) for item in value]
+    return value
 
 
 def _normalize_username(device_id: str) -> str:
@@ -118,8 +184,15 @@ class FarmbotManager:
         self.token = str(token).strip()  # encoded JWT
         self.device_id = str(device_id).strip()  # 'device_<id>' or numeric
         self.mqtt_host_raw = str(mqtt_host).strip()  # must come from token.unencoded.mqtt
+        # The one authoritative cached FarmBot state. Rebuilt (never mutated
+        # in place) by _on_message on the MQTT thread so any reader holding a
+        # reference keeps a consistent snapshot; see merge_state().
         self.status: dict = {}
         self._status_revision = 0
+        self._status_lock = threading.Lock()
+        # time.monotonic() stamps, for availability. None means "not yet".
+        self._last_status_at: Optional[float] = None
+        self._mqtt_connected_at: Optional[float] = None
         self.device_name = f"FarmBot {self.device_id}"
         self.entry_id: Optional[str] = (
             getattr(entry, "entry_id", None) if entry is not None else None
@@ -152,6 +225,15 @@ class FarmbotManager:
         self._last_vision_report_snapshot: Optional[tuple] = None
         self._known_ready_vision_image_ids: Optional[set[int]] = None
         self._vision_image_monitor_started_at = dt_util.utcnow()
+        # Cloud REST health for the image poll, tracked separately from MQTT
+        # device state so a FarmBot cloud outage cannot disturb realtime
+        # entities. See async_poll_new_vision_images().
+        self._vision_poll_failures = 0
+        self._vision_poll_retry_after = 0.0  # time.monotonic() deadline
+        self._vision_poll_last_error: Optional[str] = None
+        # Sequence cache, retained across transient FarmBot API failures.
+        self._sequences: list[dict] = []
+        self._sequences_loaded = False
         self._pending_rpcs: dict[str, asyncio.Future] = {}
         self._soil_capture_lock = asyncio.Lock()
         self.soil_captures: dict[str, dict[str, Any]] = {}
@@ -167,6 +249,11 @@ class FarmbotManager:
         self._gcode_tasks: set[asyncio.Task] = set()
         self.weeding_runs: dict[str, dict[str, Any]] = {}
         self._weeding_tasks: set[asyncio.Task] = set()
+        self.moves: dict[str, dict[str, Any]] = {}
+        self._move_tasks: set[asyncio.Task] = set()
+        # Cached firmware config for motion state; see async_motion_config().
+        self._motion_config: dict[str, Any] = {}
+        self._motion_config_at: Optional[float] = None
 
     # -------------------- Token Refresh --------------------
     def _should_refresh_token(self) -> bool:
@@ -306,6 +393,7 @@ class FarmbotManager:
         self._mqtt.reconnect_delay_set(min_delay=1, max_delay=30)
 
         self._mqtt.on_connect = self._on_connect
+        self._mqtt.on_disconnect = self._on_disconnect
         self._mqtt.on_message = self._on_message
 
         _LOGGER.info(
@@ -333,6 +421,7 @@ class FarmbotManager:
             self._mqtt.loop_stop()
             self._mqtt.disconnect()
             self._mqtt_connected = False
+            self._mqtt_connected_at = None
             _LOGGER.info("MQTT disconnected for %s", self.device_id)
 
     async def disconnect_mqtt(self):
@@ -345,6 +434,7 @@ class FarmbotManager:
         # 134 as a ReasonCode) - see paho.mqtt.reasoncodes for the mapping.
         if reason_code == 0:
             self._mqtt_connected = True
+            self._mqtt_connected_at = time.monotonic()
             client.subscribe(TOPIC_STATUS.format(device_id=self.device_id))
             client.subscribe(TOPIC_FROM_DEVICE.format(device_id=self.device_id))
             client.subscribe(TOPIC_LOGS.format(device_id=self.device_id))
@@ -371,6 +461,17 @@ class FarmbotManager:
                 "MQTT connect failed: %s (reason code %s)", reason_code, reason_code.value
             )
 
+    def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        """Record that the broker link dropped so entities can go unavailable.
+
+        paho reconnects on its own (see reconnect_delay_set); this only keeps
+        ``device_is_available`` honest in the meantime.
+        """
+        self._mqtt_connected = False
+        self._mqtt_connected_at = None
+        _LOGGER.info("MQTT disconnected for %s (reason %s)", self.device_id, reason_code)
+        self._notify_state_listeners()
+
     def _on_message(self, client, userdata, msg):
         try:
             payload = json.loads(msg.payload.decode())
@@ -379,19 +480,79 @@ class FarmbotManager:
             return
 
         if msg.topic == TOPIC_STATUS.format(device_id=self.device_id):
-            state = payload.get("body", payload) or {}
-            self.status = state
-            self._status_revision += 1
-            # Paho callback thread -> HA loop:
-            self.hass.loop.call_soon_threadsafe(
-                async_dispatcher_send, self.hass, SIGNAL_STATE, self.status
-            )
+            self._apply_status_payload(payload)
+            self._notify_state_listeners()
         elif msg.topic == TOPIC_FROM_DEVICE.format(device_id=self.device_id):
             self.hass.loop.call_soon_threadsafe(self._resolve_rpc_response, payload)
         elif msg.topic == TOPIC_LOGS.format(device_id=self.device_id):
             self.hass.loop.call_soon_threadsafe(self._handle_log_message, payload)
         else:
             _LOGGER.debug("Unhandled topic %s", msg.topic)
+
+    def _apply_status_payload(self, payload: dict[str, Any]) -> int:
+        """Merge one ``bot/<id>/status`` payload into the cached state.
+
+        Runs on the paho network thread. Nothing here touches Home Assistant.
+        """
+        state = payload.get("body", payload) or {}
+        if not isinstance(state, dict):
+            _LOGGER.debug("Ignoring FarmBot status payload of type %s", type(state).__name__)
+            return self._status_revision
+        with self._status_lock:
+            self.status = merge_state(self.status, state)
+            self._status_revision += 1
+            self._last_status_at = time.monotonic()
+            revision = self._status_revision
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            # Redacted: FarmBot state carries the Farmware environment, which
+            # is where Farmware authors keep API keys and credentials.
+            _LOGGER.debug("FarmBot status update #%s: %s", revision, redact_state(state))
+        return revision
+
+    def _notify_state_listeners(self) -> None:
+        """Hand the cached state to Home Assistant from any thread.
+
+        This is *the* boundary between FarmBot's callback threads and Home
+        Assistant. paho delivers MQTT callbacks on its own network thread, so
+        every dispatch is marshalled onto the event loop here and entities
+        only ever see ``SIGNAL_STATE`` on the loop.
+        """
+        self.hass.loop.call_soon_threadsafe(self._dispatch_state)
+
+    @callback
+    def _dispatch_state(self) -> None:
+        """Send the cached state to entities. Event loop only."""
+        async_dispatcher_send(self.hass, SIGNAL_STATE, self.status)
+
+    # -------------------- Cached state accessors --------------------
+    def device_is_available(self) -> bool:
+        """True when FarmBot itself looks reachable.
+
+        Two things have to hold, and neither is "the last payload mentioned
+        my pin":
+
+        1. The MQTT client is connected to FarmBot's broker.
+        2. The bot has been heard from recently. The broker is FarmBot's
+           cloud broker rather than the device, so a healthy broker link says
+           nothing about whether the bot is powered on; a status broadcast
+           (or, right after connecting, the connection itself) is what proves
+           the device is there.
+
+        Deliberately independent of the FarmBot REST API: a cloud/DNS outage
+        must not make MQTT-backed entities unavailable.
+        """
+        if self._mqtt is None or not self._mqtt_connected:
+            return False
+        reference = self._last_status_at
+        if reference is None:
+            reference = self._mqtt_connected_at
+        if reference is None:
+            return False
+        return (time.monotonic() - reference) < DEVICE_STATE_STALE_SECONDS
+
+    def redacted_status(self) -> dict[str, Any]:
+        """Cached FarmBot state, safe to include in diagnostics or logs."""
+        return redact_state(self.status)
 
     def _handle_log_message(self, payload: dict[str, Any]) -> None:
         """Turn FarmBot OS PinBinding trigger logs into durable HA diagnostics."""
@@ -437,10 +598,21 @@ class FarmbotManager:
 
     # -------------------- Command helpers --------------------
     def _publish_rpc(self, rpc: dict):
-        assert self._mqtt is not None, "MQTT client not connected"
+        """Publish a CeleryScript RPC, raising if it could not be sent.
+
+        Previously an ``assert`` (stripped under ``python -O``) that silently
+        did nothing when MQTT was down. Callers -- entities in particular --
+        need to know whether a command actually left the building before they
+        show the user the state it asked for.
+        """
+        if self._mqtt is None or not self._mqtt_connected:
+            raise RuntimeError("FarmBot MQTT is not connected")
         topic = TOPIC_COMMAND.format(device_id=self.device_id)
         _LOGGER.debug("Publishing RPC to %s: %s", topic, rpc)
-        self._mqtt.publish(topic, json.dumps(rpc))
+        info = self._mqtt.publish(topic, json.dumps(rpc))
+        rc = getattr(info, "rc", mqtt.MQTT_ERR_SUCCESS)
+        if rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"FarmBot rejected the MQTT publish (rc={rc})")
 
     def send_rpc_request(
         self, commands: list, priority: int = 600, label: str | None = None
@@ -508,32 +680,44 @@ class FarmbotManager:
         cs = [{"kind": "toggle_pin", "args": {"pin_number": int(pin)}}]
         self.send_rpc_request(cs)
 
-    def fetch_sequences(self) -> list[dict]:
-        """Return a list of sequences [{'id': int, 'name': str}, ...] from FarmBot API."""
-        url = f"{API_BASE_URL}/sequences"
-        headers = {"Authorization": f"Bearer {self.token}"}
-        resp = requests.get(url, headers=headers, timeout=10)
+    @property
+    def sequences(self) -> list[dict]:
+        """Last successfully fetched sequences. Survives FarmBot API outages."""
+        return list(self._sequences)
 
-        if resp.status_code in (401, 403):
-            _LOGGER.warning(
-                "FarmBot API returned %s - token may be expired, triggering reauth",
-                resp.status_code,
-            )
-            if self._entry and not self._auth_failed:
-                self._auth_failed = True
-                # This may be called from an executor thread, so schedule in event loop
-                self.hass.loop.call_soon_threadsafe(self._entry.async_start_reauth, self.hass)
-            return []
+    @property
+    def sequences_loaded(self) -> bool:
+        """True once sequences have been fetched successfully at least once."""
+        return self._sequences_loaded
 
-        resp.raise_for_status()
-        data = resp.json() or []
-        items = []
-        for s in data:
-            sid = s.get("id")
-            name = s.get("name") or s.get("label") or f"Sequence {sid}"
-            if sid is not None:
+    async def async_fetch_sequences(self) -> list[dict]:
+        """Return ``[{'id': int, 'name': str}, ...]`` from the FarmBot API.
+
+        Goes through :class:`FarmbotApiClient` like every other FarmBot HTTP
+        call, so it shares that client's timeouts, bounded retries, single
+        reauth trigger and log redaction, and -- unlike the blocking
+        ``requests`` call this replaces -- never occupies an executor thread.
+
+        Raises :class:`FarmbotApiError` when FarmBot cannot be reached. The
+        previously cached list is left untouched in that case; callers decide
+        whether to keep showing it.
+        """
+        data = await self.api.async_get_sequences()
+        items: list[dict] = []
+        for sequence in data:
+            if not isinstance(sequence, dict):
+                continue
+            sid = sequence.get("id")
+            if sid is None:
+                continue
+            name = sequence.get("name") or sequence.get("label") or f"Sequence {sid}"
+            try:
                 items.append({"id": int(sid), "name": str(name)})
-        return items
+            except (TypeError, ValueError):
+                continue
+        self._sequences = items
+        self._sequences_loaded = True
+        return list(items)
 
     def execute_sequence(self, sequence_id: int):
         cs = [{"kind": "execute", "args": {"sequence_id": int(sequence_id)}}]
@@ -561,17 +745,284 @@ class FarmbotManager:
         self.send_rpc_request(cs)
 
     def get_pin_value(self, pin: int):
-        pins = (self.status or {}).get("pins") or {}
+        """Last reported value of a FarmBot pin, or None if never reported.
+
+        Total by construction: FarmBot has been seen to report ``pins`` as a
+        mapping *and* as a list, and a payload may omit it entirely. None of
+        those shapes may raise -- an exception here used to propagate out of
+        an entity's update and cost the entity its place on the platform.
+        """
+        status = self.status if isinstance(self.status, dict) else {}
+        pins = status.get("pins") or {}
         if isinstance(pins, dict):
-            item = pins.get(str(pin)) or pins.get(int(pin))
+            item = pins.get(str(pin))
+            if item is None:
+                item = pins.get(pin)
             if isinstance(item, dict):
                 return item.get("value")
             return item
         if isinstance(pins, list):
-            for p in pins:
-                if str(p.get("number")) == str(pin):
-                    return p.get("value")
+            for entry in pins:
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("number")) == str(pin):
+                    return entry.get("value")
         return None
+
+    def pin_is_on(self, pin: int) -> Optional[bool]:
+        """Last reported on/off state of a pin, or None if never reported.
+
+        None means "FarmBot has not told us about this pin", which is not the
+        same as "off" and definitely not the same as "unavailable" -- callers
+        keep whatever they last knew.
+        """
+        value = self.get_pin_value(pin)
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        try:
+            return bool(float(value))
+        except (TypeError, ValueError):
+            return None
+
+    def is_locked(self) -> Optional[bool]:
+        """Emergency-stop state from cached FarmBot state, or None if unknown."""
+        status = self.status if isinstance(self.status, dict) else {}
+        info = status.get("informational_settings")
+        if not isinstance(info, dict) or "locked" not in info:
+            return None
+        return bool(info.get("locked"))
+
+    # -------------------- Supervised positioning --------------------
+
+    def connection_state(self) -> dict[str, bool]:
+        """Public connected/locked view for callers that need no axis bounds."""
+        return self._live_connection_state()
+
+    async def async_motion_config(self, *, force: bool = False) -> dict[str, Any]:
+        """Firmware config for motion state, cached for MOTION_CONFIG_CACHE_SECONDS.
+
+        Axis lengths only change when the operator edits firmware settings, but
+        the Vision app's positioning tab polls motion state every couple of
+        seconds. Without this cache each poll would be a FarmBot REST round
+        trip. A failed refresh keeps the previous config rather than dropping
+        the caller to "bounds unavailable", which would reject every move.
+        """
+        now = time.monotonic()
+        fresh = (
+            self._motion_config_at is not None
+            and now - self._motion_config_at < MOTION_CONFIG_CACHE_SECONDS
+        )
+        if self._motion_config and fresh and not force:
+            return self._motion_config
+        try:
+            config = await self.api.async_get_firmware_config()
+        except FarmbotApiError as err:
+            if self._motion_config:
+                _LOGGER.debug("Keeping cached FarmBot motion configuration: %s", err)
+                return self._motion_config
+            raise
+        self._motion_config = config
+        self._motion_config_at = now
+        return config
+
+    def positioning_peripherals(self) -> dict[str, Any]:
+        """Last reported on/off state of every switchable peripheral pin.
+
+        ``None`` for a pin FarmBot has not reported yet, which is deliberately
+        not the same as "off" -- the Vision app shows it as unknown instead of
+        drawing a grow light that may well be on.
+        """
+        return {str(pin): self.pin_is_on(pin) for pin in POSITIONING_PERIPHERAL_PINS}
+
+    def _resolve_move_target(
+        self,
+        *,
+        requested: dict[str, float | None],
+        relative: bool,
+        bounds: dict[str, Any],
+    ) -> dict[str, float]:
+        """Turn a partial/relative request into one bounds-checked XYZ point.
+
+        An omitted axis means "leave it where it is", so the live position is
+        required even for an absolute move: without it neither the resulting
+        target nor the arrival check below would be knowable.
+        """
+        current = self._reported_position()
+        if current is None:
+            raise ValueError("FarmBot has not reported a position")
+        target: dict[str, float] = {}
+        for axis in ("x", "y", "z"):
+            value = requested.get(axis)
+            if value is None:
+                target[axis] = current[axis]
+                continue
+            target[axis] = current[axis] + float(value) if relative else float(value)
+        if not all(math.isfinite(value) for value in target.values()):
+            raise ValueError("Move target coordinates must be finite")
+        for axis in ("x", "y", "z"):
+            axis_bounds = bounds.get(axis)
+            if axis_bounds is None:
+                raise ValueError("FarmBot axis bounds are unavailable")
+            if not axis_bounds[0] <= target[axis] <= axis_bounds[1]:
+                raise ValueError(
+                    f"Move target {axis.upper()} {target[axis]:.1f} is outside FarmBot bounds "
+                    f"({axis_bounds[0]:.0f} to {axis_bounds[1]:.0f} mm)"
+                )
+        return target
+
+    def start_move(
+        self,
+        *,
+        x: float | None,
+        y: float | None,
+        z: float | None,
+        relative: bool,
+        safe_z: bool,
+        speed: int,
+        firmware_config: dict[str, Any],
+    ) -> tuple[str, dict[str, float]]:
+        """Queue one supervised move and return its ID and resolved target."""
+        state = self.soil_motion_state(firmware_config)
+        if not state["connected"]:
+            raise ValueError("FarmBot is not connected")
+        if state["locked"]:
+            raise ValueError("FarmBot is emergency-stopped")
+        active_sets = (
+            self._soil_capture_tasks,
+            self._grid_repair_tasks,
+            self._gcode_tasks,
+            self._weeding_tasks,
+            self._move_tasks,
+        )
+        for task_set in active_sets:
+            task_set.intersection_update(task for task in task_set if not task.done())
+        if state["busy"] or any(active_sets):
+            raise ValueError("FarmBot is busy")
+        target = self._resolve_move_target(
+            requested={"x": x, "y": y, "z": z},
+            relative=relative,
+            bounds=state["axis_bounds"],
+        )
+        move_id = str(uuid.uuid4())
+        self.moves[move_id] = {
+            "move_id": move_id,
+            "status": "queued",
+            "message": "Move queued",
+            "target": target,
+            "reported_position": state["position"],
+            "created_at": dt_util.utcnow().isoformat(),
+        }
+        task = asyncio.create_task(
+            self._run_move(move_id=move_id, target=target, safe_z=safe_z, speed=speed),
+            name=f"farmbot-move-{move_id}",
+        )
+        self._move_tasks.add(task)
+        task.add_done_callback(self._move_tasks.discard)
+        return move_id, target
+
+    async def _run_move(
+        self,
+        *,
+        move_id: str,
+        target: dict[str, float],
+        safe_z: bool,
+        speed: int,
+    ) -> None:
+        """Send one acknowledged move, then confirm FarmBot actually arrived.
+
+        An ``rpc_ok`` only says FarmBot accepted the command, so the arrival
+        check is what lets the caller (the grow-light schedule in particular)
+        know the gantry is really over the plant it is lighting.
+        """
+        record = self.moves[move_id]
+        async with self._soil_capture_lock:
+            record.update(
+                status="running",
+                message=(
+                    f"Moving to X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f}"
+                ),
+                started_at=dt_util.utcnow().isoformat(),
+            )
+            try:
+                await self.async_rpc_request(
+                    [self._move_command(**target, speed=speed, safe_z=safe_z)],
+                    timeout=MOVE_RPC_TIMEOUT_SECONDS,
+                )
+                reported = await self._wait_for_grid_position(
+                    target=target,
+                    timeout=MOVE_POSITION_TIMEOUT_SECONDS,
+                    tolerance_mm=MOVE_POSITION_TOLERANCE_MM,
+                )
+            except asyncio.CancelledError:
+                record.update(status="failed", message="Move was cancelled")
+                raise
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.warning("FarmBot move %s failed: %s", move_id, err)
+                record.update(
+                    status="failed",
+                    message=f"Move failed: {err}"[:240],
+                    reported_position=self._reported_position(),
+                    finished_at=dt_util.utcnow().isoformat(),
+                )
+                return
+            observed = reported or self._reported_position()
+            record["reported_position"] = observed
+            record["finished_at"] = dt_util.utcnow().isoformat()
+            if reported is None:
+                observed_text = (
+                    "unavailable"
+                    if observed is None
+                    else f"X {observed['x']:.1f}, Y {observed['y']:.1f}, Z {observed['z']:.1f}"
+                )
+                record.update(
+                    status="failed",
+                    message=(
+                        "FarmBot did not reach "
+                        f"X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f} "
+                        f"within {MOVE_POSITION_TOLERANCE_MM:g} mm; "
+                        f"last position was {observed_text}"
+                    )[:240],
+                )
+                return
+            record.update(
+                status="complete",
+                message=(
+                    "FarmBot position confirmed at "
+                    f"X {reported['x']:.1f}, Y {reported['y']:.1f}, Z {reported['z']:.1f}"
+                ),
+            )
+
+    def move(self, move_id: str) -> dict[str, Any] | None:
+        record = self.moves.get(move_id)
+        return dict(record) if record is not None else None
+
+    async def async_set_peripheral(self, *, pin: int, value: bool) -> None:
+        """Switch a peripheral pin through an acknowledged RPC.
+
+        ``send_write_pin`` is fire-and-forget, which is fine for a switch entity
+        the operator is watching but not for the grow-light schedule: it has to
+        know the light really came on before it credits the plant with an hour
+        of light.
+        """
+        if int(pin) not in POSITIONING_PERIPHERAL_PINS:
+            raise ValueError(f"Pin {pin} is not a switchable FarmBot peripheral")
+        await self.async_rpc_request(
+            [
+                {
+                    "kind": "write_pin",
+                    "args": {
+                        "pin_number": int(pin),
+                        "pin_value": int(bool(value)),
+                        "pin_mode": 0,
+                    },
+                }
+            ],
+            timeout=SOIL_RPC_TIMEOUT_SECONDS,
+        )
 
     # -------------------- Soil-height capture --------------------
 
@@ -784,10 +1235,12 @@ class FarmbotManager:
         reported_busy = bool(
             ((self.status or {}).get("informational_settings") or {}).get("busy", False)
         )
+        self._move_tasks = {t for t in self._move_tasks if not t.done()}
         if (
             (reported_busy and not same_batch_active)
             or (active_soil_tasks and not same_batch_active)
             or any(not task.done() for task in self._grid_repair_tasks)
+            or any(not task.done() for task in self._move_tasks)
         ):
             raise ValueError("FarmBot is busy")
         bounds = state["axis_bounds"]
@@ -859,10 +1312,7 @@ class FarmbotManager:
         original_position: dict[str, Any] | None,
     ) -> None:
         record = self.soil_captures[capture_id]
-        light_state = (self.status or {}).get("pins", {}).get(str(SOIL_CAPTURE_LIGHTING_PIN), 0)
-        initial_light_value = int(
-            bool(light_state.get("value", 0) if isinstance(light_state, dict) else light_state)
-        )
+        initial_light_value = int(bool(self.pin_is_on(SOIL_CAPTURE_LIGHTING_PIN)))
         async with self._soil_capture_lock:
             final_status = "failed"
             final_message = "Soil capture failed"
@@ -1337,11 +1787,13 @@ class FarmbotManager:
         # the Vision app immediately queues the next chunk.
         self._grid_repair_tasks = {t for t in self._grid_repair_tasks if not t.done()}
         self._soil_capture_tasks = {t for t in self._soil_capture_tasks if not t.done()}
+        self._move_tasks = {t for t in self._move_tasks if not t.done()}
         if (
             state["busy"]
             or self._soil_capture_lock.locked()
             or any(not task.done() for task in self._grid_repair_tasks)
             or any(not task.done() for task in self._soil_capture_tasks)
+            or any(not task.done() for task in self._move_tasks)
         ):
             raise ValueError("FarmBot is busy")
         bounds = state["axis_bounds"]
@@ -1598,10 +2050,7 @@ class FarmbotManager:
         """
         record = self.grid_repairs[repair_id]
         final_status, final_message = "failed", "Photo-grid repair failed"
-        light_state = (self.status or {}).get("pins", {}).get(str(GRID_REPAIR_LIGHTING_PIN), 0)
-        initial_light_value = int(
-            bool(light_state.get("value", 0) if isinstance(light_state, dict) else light_state)
-        )
+        initial_light_value = int(bool(self.pin_is_on(GRID_REPAIR_LIGHTING_PIN)))
         async with self._soil_capture_lock:
             try:
                 if not initial_light_value:
@@ -1824,12 +2273,14 @@ class FarmbotManager:
         self._gcode_tasks = {t for t in self._gcode_tasks if not t.done()}
         self._grid_repair_tasks = {t for t in self._grid_repair_tasks if not t.done()}
         self._soil_capture_tasks = {t for t in self._soil_capture_tasks if not t.done()}
+        self._move_tasks = {t for t in self._move_tasks if not t.done()}
         if (
             state["busy"]
             or self._soil_capture_lock.locked()
             or any(not task.done() for task in self._gcode_tasks)
             or any(not task.done() for task in self._grid_repair_tasks)
             or any(not task.done() for task in self._soil_capture_tasks)
+            or any(not task.done() for task in self._move_tasks)
         ):
             raise gcode_lib.GcodeError("FarmBot is busy")
 
@@ -2227,6 +2678,7 @@ move_absolute({number(front[0])},{number(front[1])},{number(z + 50)},50)
             self._grid_repair_tasks,
             self._gcode_tasks,
             self._weeding_tasks,
+            self._move_tasks,
         )
         for task_set in active_sets:
             task_set.intersection_update(task for task in task_set if not task.done())
@@ -2586,6 +3038,50 @@ move_absolute({number(front[0])},{number(front[1])},{number(z + 50)},50)
             async_dispatcher_send(self.hass, SIGNAL_VISION_STATE)
         return changed
 
+    def _note_vision_poll_failure(self, err: Exception) -> None:
+        """Back off and log once for a failing FarmBot image poll.
+
+        The image poll runs every 15 s, so an outage that logged every
+        attempt produced a wall of identical warnings (15 in a few minutes
+        was what prompted this). Instead the retry interval doubles from one
+        poll interval up to ``VISION_IMAGE_POLL_BACKOFF_MAX_SECONDS``, the
+        first failure (and any change of error) is logged at warning level,
+        and repeats of the same error drop to debug.
+        """
+        self._vision_poll_failures += 1
+        delay = min(
+            VISION_IMAGE_POLL_INTERVAL_SECONDS * (2 ** (self._vision_poll_failures - 1)),
+            VISION_IMAGE_POLL_BACKOFF_MAX_SECONDS,
+        )
+        self._vision_poll_retry_after = time.monotonic() + delay
+        message = str(err)
+        if message != self._vision_poll_last_error:
+            self._vision_poll_last_error = message
+            _LOGGER.warning(
+                "Could not poll FarmBot images for Vision: %s. "
+                "Retrying in %ss; existing Vision data is kept",
+                message,
+                int(delay),
+            )
+        else:
+            _LOGGER.debug(
+                "FarmBot image poll still failing (attempt %s, retry in %ss): %s",
+                self._vision_poll_failures,
+                int(delay),
+                message,
+            )
+
+    def _note_vision_poll_success(self) -> None:
+        """Clear image-poll backoff after connectivity returns."""
+        if self._vision_poll_failures:
+            _LOGGER.info(
+                "FarmBot image polling recovered after %s failed attempt(s)",
+                self._vision_poll_failures,
+            )
+        self._vision_poll_failures = 0
+        self._vision_poll_retry_after = 0.0
+        self._vision_poll_last_error = None
+
     async def async_poll_new_vision_images(self) -> list[int]:
         """Detect newly processed FarmBot photos and request their analysis.
 
@@ -2595,12 +3091,21 @@ move_absolute({number(front[0])},{number(front[1])},{number(z + 50)},50)
         downloaded by ``get_vision_image`` after the companion app accepts the
         request. The first successful poll establishes a baseline so installing
         or restarting the integration does not replay the whole image history.
+
+        A FarmBot cloud or DNS outage is expected, not exceptional: failures
+        back off (see ``_note_vision_poll_failure``), keep the existing
+        image/vision state, log once rather than once per tick, and resume
+        automatically. Nothing here touches MQTT-backed entity state.
         """
+        now = time.monotonic()
+        if now < self._vision_poll_retry_after:
+            return []
         try:
             images = await self.api.async_get_images()
         except FarmbotApiError as err:
-            _LOGGER.warning("Could not poll FarmBot images for Vision: %s", err)
+            self._note_vision_poll_failure(err)
             return []
+        self._note_vision_poll_success()
 
         ready: dict[int, dict] = {}
         for image in images:

@@ -6,11 +6,12 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
+from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import DOMAIN, SIGNAL_STATE, SIGNAL_VISION_STATE
-from .entity import FarmbotEntity
+from .entity import FarmbotDeviceStateEntity, FarmbotEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,51 +30,60 @@ async def async_setup_entry(hass, entry, async_add_entities):
     ])
 
 
-class FarmbotBusyBinarySensor(FarmbotEntity, BinarySensorEntity):
+class _FarmbotInformationalBinarySensor(FarmbotDeviceStateEntity, BinarySensorEntity):
+    """Binary sensor reading one flag out of FarmBot's informational settings.
+
+    Reads the manager's merged state cache rather than the payload it was
+    handed, so a partial FarmBot update that omits the flag leaves the last
+    known value alone instead of resetting it to False.
+    """
+
+    _key: str
+    _attr_should_poll = False
+
     def __init__(self, manager):
         super().__init__(manager)
-        self._state = False
+        self._state = None
+        self._state = self._read()
+
+    def _read(self):
+        status = self._manager.status if isinstance(self._manager.status, dict) else {}
+        info = status.get("informational_settings")
+        if not isinstance(info, dict) or self._key not in info:
+            return self._state  # nothing reported; keep what we knew
+        return bool(info.get(self._key))
+
+    @property
+    def is_on(self):
+        return self._state
+
+    async def async_added_to_hass(self):
+        unsub = async_dispatcher_connect(self.hass, SIGNAL_STATE, self._update_from_state)
+        self.async_on_remove(unsub)
+
+    @callback
+    def _update_from_state(self, _status=None):
+        # @callback: an undecorated synchronous dispatcher target is run in an
+        # executor thread by Home Assistant, where entity state APIs are not
+        # safe to call.
+        self._state = self._read()
+        self.async_write_ha_state()
+
+
+class FarmbotBusyBinarySensor(_FarmbotInformationalBinarySensor):
+    _key = "busy"
 
     @property
     def name(self):
         return f"{self._manager.device_name} Busy"
 
-    @property
-    def is_on(self):
-        return self._state
 
-    async def async_added_to_hass(self):
-        unsub = async_dispatcher_connect(self.hass, SIGNAL_STATE, self._update_from_state)
-        self.async_on_remove(unsub)
-
-    def _update_from_state(self, status):
-        busy = status.get("informational_settings", {}).get("busy", False)
-        if busy != self._state:
-            self._state = busy
-            self.schedule_update_ha_state()
-
-
-class FarmbotEstopBinarySensor(FarmbotEntity, BinarySensorEntity):
-    def __init__(self, manager):
-        super().__init__(manager)
-        self._state = False
+class FarmbotEstopBinarySensor(_FarmbotInformationalBinarySensor):
+    _key = "locked"
 
     @property
     def name(self):
         return f"{self._manager.device_name} Emergency Stop"
-
-    @property
-    def is_on(self):
-        return self._state
-
-    async def async_added_to_hass(self):
-        unsub = async_dispatcher_connect(self.hass, SIGNAL_STATE, self._update_from_state)
-        self.async_on_remove(unsub)
-    def _update_from_state(self, status):
-        locked = status.get("informational_settings", {}).get("locked", False)
-        if locked != self._state:
-            self._state = locked
-            self.schedule_update_ha_state()
 
 
 class FarmbotVisionAvailableBinarySensor(FarmbotEntity, BinarySensorEntity):
@@ -113,9 +123,11 @@ class FarmbotVisionAvailableBinarySensor(FarmbotEntity, BinarySensorEntity):
         )
         self.async_on_remove(unsub_timer)
 
+    @callback
     def _handle_update(self):
-        self.schedule_update_ha_state()
+        self.async_write_ha_state()
 
+    @callback
     def _handle_timeout_check(self, now):
-        self.schedule_update_ha_state()
+        self.async_write_ha_state()
 

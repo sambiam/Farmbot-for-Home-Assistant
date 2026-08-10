@@ -8,10 +8,11 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
+from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import DOMAIN, SIGNAL_BUTTON_INPUT, SIGNAL_VISION_STATE
-from .entity import FarmbotEntity
+from .entity import FarmbotDeviceStateEntity, FarmbotEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(sensors)
     _LOGGER.debug("Added %d FarmBot sensors", len(sensors))
 
-class FarmbotCoordinateSensor(FarmbotEntity, SensorEntity):
+class FarmbotCoordinateSensor(FarmbotDeviceStateEntity, SensorEntity):
     """Polling-based sensor for one axis of FarmBot’s position."""
 
     def __init__(self, manager, axis):
@@ -59,20 +60,22 @@ class FarmbotCoordinateSensor(FarmbotEntity, SensorEntity):
         return True
 
     async def async_update(self):
-        """Called every SCAN_INTERVAL to refresh axis value."""
-        pos = (
-            self._manager.status
-            .get("location_data", {})
-            .get("position", {})
-        )
-        val = pos.get(self._axis)
+        """Called every SCAN_INTERVAL to refresh axis value.
+
+        Home Assistant writes the state itself once a polled update returns,
+        so this only updates the cached value. A payload that does not carry
+        a position leaves the last known coordinate alone.
+        """
+        status = self._manager.status if isinstance(self._manager.status, dict) else {}
+        location = status.get("location_data")
+        pos = location.get("position") if isinstance(location, dict) else None
+        val = pos.get(self._axis) if isinstance(pos, dict) else None
         if val is None:
             _LOGGER.debug("Sensor %s: position key missing", self._axis)
             return
         if val != self._state:
             _LOGGER.debug("Sensor %s: %s → %s", self._axis, self._state, val)
             self._state = val
-            self.async_write_ha_state()
 
 
 class FarmbotLastButtonInputSensor(FarmbotEntity, SensorEntity):
@@ -111,8 +114,11 @@ class FarmbotLastButtonInputSensor(FarmbotEntity, SensorEntity):
         )
         self.async_on_remove(unsub)
 
+    @callback
     def _handle_update(self):
-        self.schedule_update_ha_state()
+        # @callback: without it Home Assistant runs this dispatcher target in
+        # an executor thread, where entity state APIs are unsafe.
+        self.async_write_ha_state()
 
 
 class _FarmbotVisionSensor(FarmbotEntity, SensorEntity):
@@ -129,8 +135,11 @@ class _FarmbotVisionSensor(FarmbotEntity, SensorEntity):
         unsub = async_dispatcher_connect(self.hass, SIGNAL_VISION_STATE, self._handle_update)
         self.async_on_remove(unsub)
 
+    @callback
     def _handle_update(self):
-        self.schedule_update_ha_state()
+        # @callback: without it Home Assistant runs this dispatcher target in
+        # an executor thread, where entity state APIs are unsafe.
+        self.async_write_ha_state()
 
 
 class FarmbotVisionStatusSensor(_FarmbotVisionSensor):

@@ -1,14 +1,17 @@
 # custom_components/farmbot/select.py
 
 import logging
+import time
 from datetime import timedelta
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .api import FarmbotApiError
+from .const import DOMAIN, SEQUENCE_FETCH_FAILURE_LOG_INTERVAL_SECONDS
 from .entity import FarmbotEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,18 +26,37 @@ async def async_setup_entry(
     async_add_entities([FarmbotSequenceSelect(manager)], update_before_add=False)
 
 class FarmbotSequenceSelect(FarmbotEntity, SelectEntity):
+    """Picks (and launches) a FarmBot sequence.
+
+    The option list comes from the FarmBot cloud API. That API is not always
+    reachable -- a DNS blip used to raise straight out of ``async_update``,
+    producing a full traceback every polling cycle. Sequences rarely change,
+    so a transient failure keeps the previously fetched options instead.
+    """
+
     def __init__(self, manager):
         super().__init__(manager)
-        self._sequences = []
+        # Seed from the manager's cache so a reload does not start blank.
+        self._sequences: list[dict] = manager.sequences
         self._selected = None
+        self._fetch_failures = 0
+        self._last_failure_log = 0.0
 
     @property
     def should_poll(self) -> bool:
         return True
 
+    @property
+    def available(self) -> bool:
+        """Unavailable only until the very first successful fetch.
+
+        After that the cached options stay usable through FarmBot API
+        outages; the bot itself is reachable over MQTT regardless.
+        """
+        return self._manager.sequences_loaded
+
     async def async_added_to_hass(self) -> None:
         await self.async_update()
-        self.async_write_ha_state()
 
     @property
     def unique_id(self) -> str:
@@ -60,14 +82,47 @@ class FarmbotSequenceSelect(FarmbotEntity, SelectEntity):
         if not seq:
             _LOGGER.error("Selected sequence ID %s not found", seq_id)
             return
+        body = [{"kind": "execute", "args": {"sequence_id": seq_id}, "body": []}]
+        try:
+            self._manager.send_rpc_request(body)
+        except RuntimeError as err:
+            raise HomeAssistantError(f"Could not launch FarmBot sequence: {err}") from err
         self._selected = seq
         self._manager.set_selected_sequence(seq)
-        body = [{"kind": "execute", "args": {"sequence_id": seq_id}, "body": []}]
-        self._manager.send_rpc_request(body)
         self.async_write_ha_state()
 
     async def async_update(self) -> None:
-        seqs = await self.hass.async_add_executor_job(self._manager.fetch_sequences)
-        if seqs != self._sequences:
-            self._sequences = seqs
-            self.async_schedule_update_ha_state()
+        """Refresh the sequence list, tolerating a FarmBot API outage."""
+        try:
+            self._sequences = await self._manager.async_fetch_sequences()
+        except FarmbotApiError as err:
+            self._log_fetch_failure(err)
+            return
+        if self._fetch_failures:
+            _LOGGER.info(
+                "FarmBot sequence list refreshed after %s failed attempt(s)",
+                self._fetch_failures,
+            )
+            self._fetch_failures = 0
+
+    def _log_fetch_failure(self, err: Exception) -> None:
+        """Warn about an unreachable FarmBot API at most twice an hour.
+
+        Expected network failures (DNS, connection reset, timeout, 5xx) are
+        already classified as FarmbotApiError by the API client, so this is
+        deliberately not a blanket handler: a programming error still
+        propagates and is still reported by Home Assistant.
+        """
+        self._fetch_failures += 1
+        now = time.monotonic()
+        if self._fetch_failures == 1 or (
+            now - self._last_failure_log >= SEQUENCE_FETCH_FAILURE_LOG_INTERVAL_SECONDS
+        ):
+            self._last_failure_log = now
+            _LOGGER.warning(
+                "Could not refresh FarmBot sequences (%s); keeping %d cached option(s)",
+                err,
+                len(self._sequences),
+            )
+        else:
+            _LOGGER.debug("FarmBot sequence refresh still failing (%s)", err)

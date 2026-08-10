@@ -38,6 +38,7 @@ from .const import (
     MAX_SOIL_RELOCATION_MM,
     MAX_SOIL_Z_OFFSET_MM,
     MIN_SOIL_BASELINE_MM,
+    POSITIONING_PERIPHERAL_PINS,
     SERVICE_APPLY_VISION_PLANT_CENTER,
     SERVICE_APPLY_VISION_RADIUS,
     SERVICE_APPLY_VISION_REMOVAL,
@@ -50,6 +51,8 @@ from .const import (
     SERVICE_GET_VISION_GRID_REPAIR,
     SERVICE_GET_VISION_IMAGE,
     SERVICE_GET_VISION_INVENTORY,
+    SERVICE_GET_VISION_MOTION,
+    SERVICE_GET_VISION_MOVE,
     SERVICE_GET_VISION_SOIL_CAPTURE,
     SERVICE_GET_VISION_SOIL_POINTS,
     SERVICE_GET_VISION_WEEDING,
@@ -58,8 +61,10 @@ from .const import (
     SERVICE_REMOVE_VISION_WEED,
     SERVICE_REPORT_VISION_STATUS,
     SERVICE_REQUEST_VISION_ANALYSIS,
+    SERVICE_SET_VISION_PERIPHERAL,
     SERVICE_START_VISION_GCODE,
     SERVICE_START_VISION_GRID_REPAIR,
+    SERVICE_START_VISION_MOVE,
     SERVICE_START_VISION_SOIL_CAPTURE,
     SERVICE_START_VISION_WEEDING,
     SERVICE_UPDATE_VISION_WEED_RADIUS,
@@ -331,6 +336,39 @@ SERVICE_START_VISION_WEEDING_SCHEMA = vol.Schema(
 )
 SERVICE_GET_VISION_WEEDING_SCHEMA = vol.Schema(
     {vol.Required("config_entry_id"): cv.string, vol.Required("run_id"): _cv_uuid}
+)
+
+SERVICE_GET_VISION_MOTION_SCHEMA = vol.Schema({vol.Required("config_entry_id"): cv.string})
+
+SERVICE_START_VISION_MOVE_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Required("config_entry_id"): cv.string,
+            vol.Optional("x"): vol.Coerce(float),
+            vol.Optional("y"): vol.Coerce(float),
+            vol.Optional("z"): vol.Coerce(float),
+            # A relative request is a per-axis offset from the live position;
+            # an omitted axis means "leave this one alone" in both modes.
+            vol.Optional("relative", default=False): cv.boolean,
+            vol.Optional("safe_z", default=True): cv.boolean,
+            vol.Optional("speed", default=100): vol.All(
+                vol.Coerce(int), vol.Range(min=1, max=100)
+            ),
+        }
+    ),
+    cv.has_at_least_one_key("x", "y", "z"),
+)
+
+SERVICE_GET_VISION_MOVE_SCHEMA = vol.Schema(
+    {vol.Required("config_entry_id"): cv.string, vol.Required("move_id"): _cv_uuid}
+)
+
+SERVICE_SET_VISION_PERIPHERAL_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("pin"): vol.All(vol.Coerce(int), vol.In(POSITIONING_PERIPHERAL_PINS)),
+        vol.Required("value"): cv.boolean,
+    }
 )
 
 SERVICE_APPLY_VISION_SOIL_HEIGHT_SCHEMA = vol.Schema(
@@ -1071,6 +1109,83 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if run is None:
             return {"status": "failed", "message": "Adaptive weeding run was not found"}
         return run
+
+    async def get_vision_motion(call: ServiceCall) -> dict:
+        """Return live position, axis bounds and peripheral state.
+
+        Deliberately cheap enough to poll: the only FarmBot REST call involved
+        is the firmware config behind ``async_motion_config``, which is cached.
+        Everything else comes from the MQTT state the manager already holds.
+        """
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        firmware = await _safe_api_call(
+            manager,
+            manager.async_motion_config(),
+            context="fetch motion configuration",
+        )
+        return {
+            "device_id": manager.device_id,
+            "generated_at": dt_util.utcnow().isoformat(),
+            "motion": manager.soil_motion_state(firmware),
+            "peripherals": manager.positioning_peripherals(),
+        }
+
+    async def start_vision_move(call: ServiceCall) -> dict:
+        """Queue one supervised move to an absolute or relative coordinate."""
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        firmware = await _safe_api_call(
+            manager,
+            manager.async_motion_config(),
+            context="fetch motion configuration for positioning",
+        )
+        try:
+            move_id, target = manager.start_move(
+                x=call.data.get("x"),
+                y=call.data.get("y"),
+                z=call.data.get("z"),
+                relative=call.data["relative"],
+                safe_z=call.data["safe_z"],
+                speed=call.data["speed"],
+                firmware_config=firmware,
+            )
+        except ValueError as err:
+            return {"status": "rejected", "message": str(err)[:240]}
+        return {
+            "status": "queued",
+            "move_id": move_id,
+            "target": target,
+            "message": (
+                f"Move to X {target['x']:.1f}, Y {target['y']:.1f}, Z {target['z']:.1f} queued"
+            ),
+        }
+
+    async def get_vision_move(call: ServiceCall) -> dict:
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        move = manager.move(call.data["move_id"])
+        if move is None:
+            return {"status": "failed", "message": "Move was not found"}
+        return move
+
+    async def set_vision_peripheral(call: ServiceCall) -> dict:
+        """Switch one FarmBot peripheral pin (e.g. the grow light on pin 7)."""
+        manager = _get_manager(hass, call.data["config_entry_id"])
+        pin = call.data["pin"]
+        value = call.data["value"]
+        state = manager.connection_state()
+        if not state["connected"]:
+            return {"status": "rejected", "message": "FarmBot is not connected"}
+        if state["locked"]:
+            return {"status": "rejected", "message": "FarmBot is emergency-stopped"}
+        try:
+            await manager.async_set_peripheral(pin=pin, value=value)
+        except (ValueError, RuntimeError, TimeoutError, asyncio.TimeoutError) as err:
+            return {"status": "rejected", "message": f"Could not switch pin {pin}: {err}"[:240]}
+        return {
+            "status": "applied",
+            "pin": pin,
+            "value": bool(value),
+            "message": f"Pin {pin} switched {'on' if value else 'off'}",
+        }
 
     async def delete_vision_image(call: ServiceCall) -> dict:
         """Delete one image this FarmBot owns.
@@ -1822,6 +1937,34 @@ def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        SERVICE_GET_VISION_MOTION,
+        _vision_response_service(get_vision_motion),
+        schema=SERVICE_GET_VISION_MOTION_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_START_VISION_MOVE,
+        _vision_response_service(start_vision_move),
+        schema=SERVICE_START_VISION_MOVE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_VISION_MOVE,
+        _vision_response_service(get_vision_move),
+        schema=SERVICE_GET_VISION_MOVE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_VISION_PERIPHERAL,
+        _vision_response_service(set_vision_peripheral),
+        schema=SERVICE_SET_VISION_PERIPHERAL_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_APPLY_VISION_SOIL_HEIGHT,
         _vision_response_service(apply_vision_soil_height),
         schema=SERVICE_APPLY_VISION_SOIL_HEIGHT_SCHEMA,
@@ -1921,6 +2064,10 @@ def _async_remove_services_if_last_entry(hass: HomeAssistant) -> None:
         SERVICE_GET_VISION_GCODE,
         SERVICE_START_VISION_WEEDING,
         SERVICE_GET_VISION_WEEDING,
+        SERVICE_GET_VISION_MOTION,
+        SERVICE_START_VISION_MOVE,
+        SERVICE_GET_VISION_MOVE,
+        SERVICE_SET_VISION_PERIPHERAL,
     ):
         hass.services.async_remove(DOMAIN, service)
 

@@ -422,6 +422,13 @@ class FarmbotApiClient:
         )
         return data if isinstance(data, dict) else {}
 
+    # -------------------- sequences --------------------
+
+    async def async_get_sequences(self) -> list[dict]:
+        """Return the FarmBot sequence catalogue."""
+        data = await self._request_json("GET", "/sequences")
+        return data if isinstance(data, list) else []
+
     # -------------------- images --------------------
 
     async def async_get_images(self) -> list[dict]:

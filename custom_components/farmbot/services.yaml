@@ -754,3 +754,95 @@ get_vision_weeding:
       required: true
       selector:
         text:
+
+get_vision_motion:
+  name: Get FarmBot motion state
+  description: >-
+    Return live position, axis bounds, connected/busy/emergency-stop state and
+    peripheral pin states. Cheap enough for a positioning UI to poll.
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        text:
+
+start_vision_move:
+  # At least one of x, y or z must be supplied. An omitted axis keeps its
+  # current value; with relative: true the supplied values are offsets.
+  name: Move FarmBot (supervised)
+  description: >-
+    Queue one bounds-checked move and verify FarmBot arrived. Rejected when the
+    bot is disconnected, emergency-stopped, busy, or the target leaves the bed.
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        text:
+    x:
+      selector:
+        number:
+          mode: box
+          step: any
+    y:
+      selector:
+        number:
+          mode: box
+          step: any
+    z:
+      selector:
+        number:
+          mode: box
+          step: any
+    relative:
+      required: false
+      default: false
+      selector:
+        boolean:
+    safe_z:
+      required: false
+      default: true
+      selector:
+        boolean:
+    speed:
+      required: false
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: slider
+
+get_vision_move:
+  name: Get supervised move status
+  description: Return the status, target and confirmed position of a queued move.
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        text:
+    move_id:
+      required: true
+      selector:
+        text:
+
+set_vision_peripheral:
+  name: Switch a FarmBot peripheral
+  description: >-
+    Switch one peripheral pin (2, 3, 7, 8, 9, 10 or 12) through an acknowledged
+    command. Pin 7 is the standard FarmBot lighting/grow-light peripheral.
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        text:
+    pin:
+      required: true
+      selector:
+        number:
+          min: 2
+          max: 12
+          mode: box
+    value:
+      required: true
+      selector:
+        boolean:

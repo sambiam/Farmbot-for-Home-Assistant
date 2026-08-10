@@ -3,8 +3,10 @@
 import logging
 
 from homeassistant.components.button import ButtonEntity
+from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
+from .api import FarmbotApiError
 from .const import EVENT_VISION_REQUEST, SIGNAL_SEQUENCE_SELECTED
 from .entity import FarmbotEntity
 
@@ -25,12 +27,15 @@ async def async_setup_entry(hass, entry, async_add_entities):
         FarmbotLaunchSelectedSequenceButton(manager),
     ]
 
-    # Fetch available sequences to determine which sequence-specific buttons to add
+    # Fetch available sequences to determine which sequence-specific buttons
+    # to add. FarmbotApiError already covers the expected network/API
+    # failures (DNS, timeouts, 5xx, rejected credentials); anything else is a
+    # bug and is left to surface.
     try:
-        sequences = await hass.async_add_executor_job(manager.fetch_sequences)
+        sequences = await manager.async_fetch_sequences()
         available_sequence_ids = {seq["id"] for seq in sequences}
         _LOGGER.debug("Available sequence IDs: %s", available_sequence_ids)
-    except Exception as e:
+    except FarmbotApiError as e:
         _LOGGER.warning("Failed to fetch sequences, no sequence buttons will be added: %s", e)
         available_sequence_ids = set()
 
@@ -133,15 +138,19 @@ class FarmbotLaunchSelectedSequenceButton(FarmbotEntity, ButtonEntity):
         }
 
     async def async_added_to_hass(self):
-        async_dispatcher_connect(self.hass, SIGNAL_SEQUENCE_SELECTED, self._update_selected)
+        unsub = async_dispatcher_connect(
+            self.hass, SIGNAL_SEQUENCE_SELECTED, self._update_selected
+        )
+        self.async_on_remove(unsub)
 
+    @callback
     def _update_selected(self, seq):
+        # @callback keeps this on the event loop. Without it Home Assistant
+        # classifies a plain synchronous dispatcher target as an executor job
+        # and runs it in a worker thread, where Home Assistant's entity APIs
+        # are not safe to touch.
         self._selected = seq
-        # This callback can be invoked from a thread other than the event
-        # loop, so use the thread-safe state update instead of
-        # async_write_ha_state (see
-        # https://developers.home-assistant.io/docs/asyncio_thread_safety/#async_write_ha_state).
-        self.schedule_update_ha_state()
+        self.async_write_ha_state()
 
     async def async_press(self):
         seq = self._selected

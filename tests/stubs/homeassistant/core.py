@@ -25,5 +25,12 @@ class SupportsResponse(str, Enum):
 
 
 def callback(func):
-    """Stand-in for homeassistant.core.callback; a no-op marker decorator."""
+    """Stand-in for homeassistant.core.callback.
+
+    Core marks the function with ``_hass_callback`` and ``HassJob`` reads
+    that marker to decide the function may run inline on the event loop
+    instead of being handed to the executor. The dispatcher stub checks the
+    same attribute, so the marker is not cosmetic here either.
+    """
+    func._hass_callback = True
     return func
