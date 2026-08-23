@@ -92,8 +92,15 @@ jobs:
           # Home Assistant Core 2026.7.x requires Python >= 3.14.2.
           python-version: "3.14"
 
+      # pytest-asyncio is required, not optional: 26 tests across
+      # test_entity_state / test_manager_mqtt / test_manager_state /
+      # test_select_sequences are `async def` and marked @pytest.mark.asyncio.
+      # Without the plugin pytest cannot await them -- it emits
+      # PytestUnknownMarkWarning and skips them, so CI goes green while a
+      # sixteenth of the suite never actually runs. pytest-asyncio 1.4.0
+      # requires pytest>=8.4, which is why pytest moved off the old 8.3.5 pin.
       - name: Install test dependencies
-        run: pip install pytest==8.3.5 -r requirements-test.txt
+        run: pip install pytest==9.1.1 pytest-asyncio==1.4.0 -r requirements-test.txt
 
       - name: Run pytest
         run: pytest -q

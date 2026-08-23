@@ -1,5 +1,11 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Strict mode: only tests explicitly marked @pytest.mark.asyncio are run as
+# coroutines, which is what the async tests in this suite already declare.
+# Pinning the fixture loop scope silences pytest-asyncio's "unset default"
+# deprecation warning and keeps each async test on its own event loop.
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 target-version = "py312"
