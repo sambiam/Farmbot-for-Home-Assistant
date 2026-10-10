@@ -74,7 +74,7 @@ SEQUENCE_FETCH_FAILURE_LOG_INTERVAL_SECONDS = 1800
 # --------------------------------------------------------------------------
 
 MIN_VISION_APP_VERSION = "0.2.0"
-INTEGRATION_VERSION = "2.15.0"
+INTEGRATION_VERSION = "2.15.1"
 VISION_CAPABILITIES = [
     "photo_grid_repair",
     "verified_photo_grid_repair",

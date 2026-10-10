@@ -3,6 +3,13 @@
 All notable changes to this integration are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 2.15.1 - 2026-10-10
+
+- **Fixed:** Hassfest requirements validation. `requests` is a dependency of
+  Home Assistant itself, so it is no longer listed in the manifest, and
+  `paho-mqtt` uses a minimum version (`>=2.1.0`) instead of an exact pin so it
+  can follow Home Assistant's own version.
+
 ## 2.15.0 - 2026-08-10
 
 - **Added:** Supervised positioning services for the FarmBot Vision app's new

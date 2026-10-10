@@ -9,8 +9,7 @@
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/sambiam/Farmbot-for-Home-Assistant/issues",
   "requirements": [
-    "requests==2.34.2",
-    "paho-mqtt==2.1.0"
+    "paho-mqtt>=2.1.0"
   ],
-  "version": "2.15.0"
+  "version": "2.15.1"
 }
