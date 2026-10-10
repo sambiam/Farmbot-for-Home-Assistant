@@ -34,11 +34,16 @@ def test_manifest_does_not_declare_pillow():
     )
 
 
-def test_manifest_keeps_non_core_requirements():
-    reqs = _requirements()
-    joined = " ".join(reqs).lower()
-    assert "requests==" in joined
-    assert "paho-mqtt==" in joined
+def test_manifest_requirements_satisfy_hassfest():
+    """Hassfest rejects Core dependencies and exact pins of Core-pinned packages.
+
+    ``requests`` is a Home Assistant dependency, so it must not be listed;
+    ``paho-mqtt`` is Core-pinned, so it must use a minimum version, not ``==``.
+    """
+    reqs = [r.lower() for r in _requirements()]
+    assert not any(r.startswith("requests") for r in reqs), reqs
+    assert any(r.startswith("paho-mqtt>=") for r in reqs), reqs
+    assert not any("paho-mqtt==" in r for r in reqs), reqs
 
 
 def test_manifest_version_is_semver():
